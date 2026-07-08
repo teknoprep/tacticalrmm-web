@@ -46,6 +46,41 @@ export function openAgentWindow(agent_id) {
   });
 }
 
+// Pi.dev AI assistant
+export function runPiChat(agent_id, query = {}) {
+  const url = router.resolve({
+    path: `/pichat/${agent_id}`,
+    query,
+  }).href;
+  openURL(url, null, {
+    popup: true,
+    scrollbars: true,
+    location: false,
+    status: false,
+    toolbar: false,
+    menubar: false,
+    width: 1200,
+    height: 900,
+  });
+}
+
+export async function createPiSession(agent_id, payload = {}) {
+  const { data } = await axios.post(`${baseUrl}/${agent_id}/pi/session/`, payload);
+  return data;
+}
+
+export async function fetchPiHistory(agent_id) {
+  const { data } = await axios.get(`${baseUrl}/${agent_id}/pi/history/`);
+  return data;
+}
+
+export async function deletePiHistory(agent_id, session_id) {
+  const { data } = await axios.delete(`${baseUrl}/${agent_id}/pi/history/`, {
+    data: { session_id },
+  });
+  return data;
+}
+
 export function runRemoteBackground(agent_id, agentPlatform) {
   const url = router.resolve(
     `/remotebackground/${agent_id}?agentPlatform=${agentPlatform}`,

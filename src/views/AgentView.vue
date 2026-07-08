@@ -10,6 +10,8 @@
         'patches',
         'software',
         'history',
+        'aihistory',
+        'aitasks',
         'notes',
         'assets',
         'audit',
