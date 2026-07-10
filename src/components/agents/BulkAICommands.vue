@@ -33,6 +33,7 @@
           flat
           :pagination="{ rowsPerPage: 0 }"
           hide-bottom
+          @row-dblclick="(e, row) => editCmd(row)"
         >
           <template #body-cell-enabled="props">
             <q-td :props="props">
@@ -60,6 +61,9 @@
             <q-td :props="props">
               <q-btn dense flat size="sm" icon="play_arrow" color="primary" @click="runNow(props.row)">
                 <q-tooltip>Run now (on all online targets)</q-tooltip>
+              </q-btn>
+              <q-btn dense flat size="sm" icon="list_alt" color="teal" @click="openResults(props.row)">
+                <q-tooltip>View last results per computer</q-tooltip>
               </q-btn>
               <q-btn dense flat size="sm" icon="stop_circle" color="negative" @click="stopCmd(props.row)">
                 <q-tooltip>Stop &amp; disable: abort in-flight runs and pause this command</q-tooltip>
@@ -320,9 +324,14 @@
             >
               <div class="row items-center">
                 <q-icon :name="preview.over_cap ? 'warning' : 'dns'" class="q-mr-xs" />
-                Matches
+                Will run on
                 <strong class="q-mx-xs">{{ preview.online_count }}</strong>
-                online device(s) right now (offline are skipped at run time).
+                online device(s)
+                <span v-if="preview.excluded_count" class="q-ml-xs">
+                  ({{ preview.excluded_count }} excluded of
+                  {{ preview.matched_count }} matched)
+                </span>
+                <span v-else class="q-ml-xs">(offline are skipped at run time).</span>
                 <q-space />
                 <q-btn
                   v-if="(preview.agents || []).length"
@@ -342,10 +351,22 @@
                 <div
                   v-for="(m, i) in preview.agents"
                   :key="i"
-                  class="pi-matched-row"
+                  class="pi-matched-row row items-center no-wrap"
                 >
-                  <q-icon name="dns" size="xs" class="q-mr-xs" />{{ m.hostname }}
-                  <span class="pi-faded">({{ m.client }} / {{ m.site }})</span>
+                  <q-checkbox
+                    dense
+                    size="xs"
+                    :model-value="!isExcluded(m.agent_id)"
+                    class="q-mr-xs"
+                    @update:model-value="(v) => setExcluded(m.agent_id, !v)"
+                  >
+                    <q-tooltip>Untick to exclude this computer from the run</q-tooltip>
+                  </q-checkbox>
+                  <q-icon name="dns" size="xs" class="q-mr-xs" />
+                  <span :class="{ 'pi-excluded': isExcluded(m.agent_id) }">
+                    {{ m.hostname }}
+                    <span class="pi-faded">({{ m.client }} / {{ m.site }})</span>
+                  </span>
                 </div>
               </div>
               <div v-if="preview.over_cap" class="text-weight-bold q-mt-xs">
@@ -462,6 +483,65 @@
           </q-card-actions>
         </q-card>
       </q-dialog>
+
+      <!-- results: computers left, last-run results right -->
+      <q-dialog v-model="resultsDialog">
+        <q-card class="pi-res-card">
+          <q-bar class="bg-primary text-white">
+            <q-icon name="list_alt" />
+            <div>{{ resultsCmd.name }} — last results per computer</div>
+            <q-space />
+            <q-btn dense flat icon="refresh" @click="loadResults" />
+            <q-btn dense flat icon="close" v-close-popup />
+          </q-bar>
+          <div class="pi-res-body">
+            <div class="pi-res-list">
+              <q-list separator>
+                <q-item
+                  v-for="r in results"
+                  :key="r.id"
+                  clickable
+                  :active="selectedResult && selectedResult.id === r.id"
+                  active-class="bg-blue-1 text-black"
+                  @click="selectedResult = r"
+                >
+                  <q-item-section side>
+                    <q-spinner v-if="r.status === 'running'" color="primary" size="18px" />
+                    <q-badge v-else :color="statusColor(r.status)" :label="r.status" />
+                  </q-item-section>
+                  <q-item-section>
+                    <q-item-label lines="1">{{ r.hostname }}</q-item-label>
+                    <q-item-label caption lines="1">{{ r.client }} / {{ r.site }}</q-item-label>
+                    <q-item-label caption>{{ formatTime(r.started_at) }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+              <div v-if="results.length === 0" class="q-pa-md text-grey">
+                No results yet — run this command first.
+              </div>
+            </div>
+            <div class="col pi-res-detail">
+              <div v-if="selectedResult">
+                <div class="row items-center q-gutter-sm q-mb-xs">
+                  <q-icon name="dns" size="sm" />
+                  <span class="text-weight-medium">{{ selectedResult.hostname }}</span>
+                  <q-badge color="blue-grey" :label="`${selectedResult.client} / ${selectedResult.site}`" />
+                  <q-badge :color="statusColor(selectedResult.status)" :label="selectedResult.status" />
+                  <div class="text-caption text-grey">
+                    {{ formatTime(selectedResult.started_at) }} · {{ selectedResult.triggered_by }}
+                  </div>
+                </div>
+                <div class="text-weight-medium q-mb-sm">{{ selectedResult.summary }}</div>
+                <q-separator class="q-mb-sm" />
+                <pre class="pi-transcript">{{ selectedResult.output || "(no transcript)" }}</pre>
+              </div>
+              <div v-else class="text-grey q-pa-md">
+                Select a computer on the left to see its last result.
+              </div>
+            </div>
+          </div>
+        </q-card>
+      </q-dialog>
     </q-card>
   </q-dialog>
 </template>
@@ -477,6 +557,7 @@ import {
   runBulkAICommandNow,
   stopBulkAICommand,
   stopAllAIRuns,
+  fetchBulkAICommandResults,
   previewBulkAITargets,
   fetchAIModels,
 } from "@/api/core";
@@ -565,6 +646,20 @@ export default {
       { label: "ALL (AND)", value: "all" },
       { label: "ANY (OR)", value: "any" },
     ];
+    function isExcluded(agentId) {
+      return (form.value.exclude_agent_ids || []).includes(agentId);
+    }
+    function setExcluded(agentId, excluded) {
+      const list = form.value.exclude_agent_ids || [];
+      if (excluded) {
+        if (!list.includes(agentId)) list.push(agentId);
+      } else {
+        const i = list.indexOf(agentId);
+        if (i >= 0) list.splice(i, 1);
+      }
+      form.value.exclude_agent_ids = list;
+      previewTargets();
+    }
     function newCondition() {
       return { field: "hostname", op: "contains", value: "" };
     }
@@ -667,6 +762,33 @@ export default {
         return `Monthly day ${row.monthly_day} at ${row.run_time || "?"}`;
       return "";
     }
+    function statusColor(s) {
+      return (
+        { ok: "green", warning: "orange", alert: "red", error: "grey", running: "blue" }[
+          s
+        ] || "grey"
+      );
+    }
+    // results viewer (computers left, last-run results right)
+    const resultsDialog = ref(false);
+    const resultsCmd = ref({});
+    const results = ref([]);
+    const selectedResult = ref(null);
+    function openResults(row) {
+      resultsCmd.value = row;
+      selectedResult.value = null;
+      results.value = [];
+      resultsDialog.value = true;
+      loadResults();
+    }
+    async function loadResults() {
+      try {
+        results.value = await fetchBulkAICommandResults(resultsCmd.value.id);
+        if (results.value.length) selectedResult.value = results.value[0];
+      } catch (e) {
+        results.value = [];
+      }
+    }
     function formatTime(ts) {
       try {
         return new Date(ts).toLocaleString();
@@ -709,6 +831,7 @@ export default {
         os_type: "all",
         filters: [newGroup()],
         filter_match: "any",
+        exclude_agent_ids: [],
         schedule_type: "daily",
         interval_hours: 24,
         run_time: "03:00",
@@ -742,6 +865,7 @@ export default {
           agent_ids: form.value.agent_ids,
           filters: form.value.filters,
           filter_match: form.value.filter_match,
+          exclude_agent_ids: form.value.exclude_agent_ids,
           mon_type: form.value.mon_type,
           os_type: form.value.os_type,
         });
@@ -844,6 +968,8 @@ export default {
       filterFieldOptions,
       filterOpOptions,
       matchOptions,
+      isExcluded,
+      setExcluded,
       addGroup,
       removeGroup,
       addCondition,
@@ -869,6 +995,13 @@ export default {
       stopCmd,
       stopAll,
       removeCmd,
+      statusColor,
+      resultsDialog,
+      resultsCmd,
+      results,
+      selectedResult,
+      openResults,
+      loadResults,
     };
   },
 };
@@ -879,10 +1012,60 @@ export default {
   opacity: 0.55;
   font-size: 0.9em;
 }
+.pi-res-card {
+  display: flex;
+  flex-direction: column;
+  width: 75vw;
+  height: 82vh;
+  max-width: 95vw;
+  max-height: 92vh;
+  min-width: 640px;
+  min-height: 400px;
+  resize: both;
+  overflow: hidden;
+}
+.pi-res-card > .q-bar {
+  width: 100%;
+}
+.pi-res-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.pi-res-list {
+  width: 320px;
+  min-width: 260px;
+  height: 100%;
+  border-right: 1px solid rgba(0, 0, 0, 0.12);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pi-res-detail {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  min-height: 0;
+}
+.pi-transcript {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: monospace;
+  font-size: 11px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 8px;
+  border-radius: 4px;
+}
 .pi-filter-group {
   border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.02);
+}
+.pi-excluded {
+  text-decoration: line-through;
+  opacity: 0.5;
 }
 .pi-matched {
   max-height: 220px;

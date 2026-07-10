@@ -235,6 +235,11 @@ export async function stopAllAIRuns() {
   return data;
 }
 
+export async function fetchBulkAICommandResults(id: number) {
+  const { data } = await axios.get(`${baseUrl}/ai/bulk/${id}/results/`);
+  return data;
+}
+
 export async function runBulkAICommandNow(id: number) {
   const { data } = await axios.post(`${baseUrl}/ai/bulk/${id}/run/`);
   return data;
