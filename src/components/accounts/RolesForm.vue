@@ -144,6 +144,16 @@
                 label="Use Pi.dev AI Assistant"
               />
               <q-checkbox
+                v-model="localRole.can_use_ai_mutate"
+                label="Allow write (mutating) actions"
+              >
+                <q-tooltip>
+                  When off, the AI session is read-only: it can inspect devices
+                  but the write tools (run script, kill process, reboot) are
+                  removed and run_command refuses destructive commands.
+                </q-tooltip>
+              </q-checkbox>
+              <q-checkbox
                 v-model="localRole.can_use_ai_autoapprove"
                 label="Allow auto-approve of device actions"
               />
@@ -517,6 +527,7 @@ export default {
           can_recover_agents: false,
           can_use_mesh: false,
           can_use_ai: false,
+          can_use_ai_mutate: false,
           can_use_ai_autoapprove: false,
           ai_allowed_models: [],
           can_uninstall_agents: false,

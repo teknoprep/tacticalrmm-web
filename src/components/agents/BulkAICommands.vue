@@ -6,6 +6,20 @@
         <div>Bulk AI Commands</div>
         <q-space />
         <q-btn dense flat icon="add" label="New" no-caps @click="addCmd" />
+        <q-btn
+          dense
+          flat
+          icon="dangerous"
+          label="Emergency stop"
+          no-caps
+          color="yellow"
+          @click="stopAll"
+        >
+          <q-tooltip>
+            Immediately abort ALL in-flight AI runs (bulk + scheduled) and stop
+            token spend. Does not disable schedules.
+          </q-tooltip>
+        </q-btn>
         <q-btn dense flat icon="refresh" @click="load" />
         <q-btn dense flat icon="close" v-close-popup />
       </q-bar>
@@ -46,6 +60,9 @@
             <q-td :props="props">
               <q-btn dense flat size="sm" icon="play_arrow" color="primary" @click="runNow(props.row)">
                 <q-tooltip>Run now (on all online targets)</q-tooltip>
+              </q-btn>
+              <q-btn dense flat size="sm" icon="stop_circle" color="negative" @click="stopCmd(props.row)">
+                <q-tooltip>Stop &amp; disable: abort in-flight runs and pause this command</q-tooltip>
               </q-btn>
               <q-btn dense flat size="sm" icon="edit" @click="editCmd(props.row)" />
               <q-btn dense flat size="sm" icon="delete" color="red" @click="removeCmd(props.row)" />
@@ -150,64 +167,124 @@
               </template>
             </q-select>
 
-            <!-- dynamic filter builder -->
+            <!-- dynamic filter builder (groups of conditions, AND/OR) -->
             <div v-else-if="form.target === 'filter'">
-              <div class="text-caption text-grey q-mb-xs">
-                Match every online agent where ALL conditions are true:
+              <div class="row items-center q-mb-sm">
+                <span class="text-caption text-grey q-mr-sm">Match</span>
+                <q-select
+                  v-model="form.filter_match"
+                  :options="matchOptions"
+                  emit-value
+                  map-options
+                  dense
+                  outlined
+                  style="min-width: 160px"
+                  @update:model-value="previewTargets"
+                />
+                <span class="text-caption text-grey q-ml-sm">
+                  of the following groups:
+                </span>
               </div>
+
               <div
-                v-for="(cond, idx) in form.filters"
-                :key="idx"
-                class="row q-col-gutter-xs q-mb-xs items-center"
+                v-for="(group, gidx) in form.filters"
+                :key="gidx"
+                class="pi-filter-group q-pa-sm q-mb-sm"
               >
-                <q-select
-                  v-model="cond.field"
-                  :options="filterFieldOptions"
-                  emit-value
-                  map-options
-                  outlined
-                  dense
-                  label="Field"
-                  class="col-3"
-                  @update:model-value="previewTargets"
-                />
-                <q-select
-                  v-model="cond.op"
-                  :options="filterOpOptions"
-                  emit-value
-                  map-options
-                  outlined
-                  dense
-                  label="Is"
-                  class="col-3"
-                  @update:model-value="previewTargets"
-                />
-                <q-input
-                  v-model="cond.value"
-                  outlined
-                  dense
-                  label="Value"
-                  class="col"
-                  debounce="300"
-                  @update:model-value="previewTargets"
-                />
+                <div class="row items-center q-mb-xs">
+                  <span class="text-caption text-grey q-mr-sm">Match</span>
+                  <q-select
+                    v-model="group.match"
+                    :options="matchOptions"
+                    emit-value
+                    map-options
+                    dense
+                    outlined
+                    style="min-width: 160px"
+                    @update:model-value="previewTargets"
+                  />
+                  <span class="text-caption text-grey q-ml-sm">
+                    of these conditions:
+                  </span>
+                  <q-space />
+                  <q-btn
+                    dense
+                    flat
+                    round
+                    icon="delete"
+                    color="red"
+                    :disable="form.filters.length <= 1"
+                    @click="removeGroup(gidx)"
+                  >
+                    <q-tooltip>Remove this group</q-tooltip>
+                  </q-btn>
+                </div>
+
+                <div
+                  v-for="(cond, cidx) in group.conditions"
+                  :key="cidx"
+                  class="row q-col-gutter-xs q-mb-xs items-center"
+                >
+                  <q-select
+                    v-model="cond.field"
+                    :options="filterFieldOptions"
+                    emit-value
+                    map-options
+                    outlined
+                    dense
+                    label="Field"
+                    class="col-3"
+                    @update:model-value="previewTargets"
+                  />
+                  <q-select
+                    v-model="cond.op"
+                    :options="filterOpOptions"
+                    emit-value
+                    map-options
+                    outlined
+                    dense
+                    label="Is"
+                    class="col-3"
+                    @update:model-value="previewTargets"
+                  />
+                  <q-input
+                    v-model="cond.value"
+                    outlined
+                    dense
+                    label="Value"
+                    class="col"
+                    debounce="300"
+                    @update:model-value="previewTargets"
+                  />
+                  <q-btn
+                    dense
+                    flat
+                    round
+                    icon="close"
+                    color="red"
+                    :disable="group.conditions.length <= 1"
+                    @click="removeCondition(gidx, cidx)"
+                  />
+                </div>
                 <q-btn
                   dense
                   flat
-                  round
-                  icon="close"
-                  color="red"
-                  @click="removeFilter(idx)"
+                  no-caps
+                  icon="add"
+                  label="Add condition"
+                  color="primary"
+                  @click="addCondition(gidx)"
                 />
               </div>
+
               <q-btn
                 dense
                 flat
                 no-caps
                 icon="add"
-                label="Add filter"
-                color="primary"
-                @click="addFilter"
+                label="Add group (OR/AND section)"
+                color="secondary"
+                @click="addGroup"
               />
             </div>
             <div
@@ -237,9 +314,13 @@
                 @update:model-value="previewTargets"
               />
             </div>
-            <q-banner dense class="bg-blue-1 text-black">
+            <q-banner
+              dense
+              :class="preview.over_cap ? 'bg-red-2 text-black' : 'bg-blue-1 text-black'"
+            >
               <div class="row items-center">
-                <q-icon name="dns" class="q-mr-xs" /> Matches
+                <q-icon :name="preview.over_cap ? 'warning' : 'dns'" class="q-mr-xs" />
+                Matches
                 <strong class="q-mx-xs">{{ preview.online_count }}</strong>
                 online device(s) right now (offline are skipped at run time).
                 <q-space />
@@ -266,6 +347,12 @@
                   <q-icon name="dns" size="xs" class="q-mr-xs" />{{ m.hostname }}
                   <span class="pi-faded">({{ m.client }} / {{ m.site }})</span>
                 </div>
+              </div>
+              <div v-if="preview.over_cap" class="text-weight-bold q-mt-xs">
+                ⚠ This exceeds the safety cap of {{ preview.cap }} agents. This
+                command will be REFUSED at run time to prevent runaway cost.
+                Narrow the target/filter (or an admin can raise
+                PI_BULK_MAX_AGENTS).
               </div>
             </q-banner>
 
@@ -363,9 +450,15 @@
               color="primary"
               icon="play_arrow"
               label="Save & Run now"
+              :disable="preview.over_cap"
               @click="saveAndRun"
             />
-            <q-btn color="primary" label="Save" @click="saveForm" />
+            <q-btn
+              color="primary"
+              label="Save"
+              :disable="preview.over_cap"
+              @click="saveForm"
+            />
           </q-card-actions>
         </q-card>
       </q-dialog>
@@ -375,13 +468,15 @@
 
 <script>
 import { ref, onMounted } from "vue";
-import { useDialogPluginComponent } from "quasar";
+import { useDialogPluginComponent, useQuasar } from "quasar";
 import {
   fetchBulkAICommands,
   saveBulkAICommand,
   editBulkAICommand,
   deleteBulkAICommand,
   runBulkAICommandNow,
+  stopBulkAICommand,
+  stopAllAIRuns,
   previewBulkAITargets,
   fetchAIModels,
 } from "@/api/core";
@@ -393,6 +488,7 @@ export default {
   name: "BulkAICommands",
   emits: [...useDialogPluginComponent.emits],
   setup() {
+    const $q = useQuasar();
     const { dialogRef, onDialogHide } = useDialogPluginComponent();
     const { clientOptions } = useClientDropdown(true);
     const { siteOptions } = useSiteDropdown(true);
@@ -456,6 +552,7 @@ export default {
       { label: "OS", value: "operating_system" },
       { label: "Platform (windows/linux/darwin)", value: "plat" },
       { label: "Monitoring type (server/workstation)", value: "monitoring_type" },
+      { label: "Installed software (name)", value: "software" },
     ];
     const filterOpOptions = [
       { label: "contains", value: "contains" },
@@ -464,11 +561,64 @@ export default {
       { label: "does not equal", value: "not_equals" },
       { label: "starts with", value: "startswith" },
     ];
-    function addFilter() {
-      form.value.filters.push({ field: "hostname", op: "contains", value: "" });
+    const matchOptions = [
+      { label: "ALL (AND)", value: "all" },
+      { label: "ANY (OR)", value: "any" },
+    ];
+    function newCondition() {
+      return { field: "hostname", op: "contains", value: "" };
     }
-    function removeFilter(idx) {
-      form.value.filters.splice(idx, 1);
+    function newGroup() {
+      return { match: "all", conditions: [newCondition()] };
+    }
+    // Accept both the new grouped shape and the legacy flat list of conditions.
+    function normalizeFilters(raw) {
+      const arr = Array.isArray(raw) ? raw : [];
+      if (arr.length === 0) return [newGroup()];
+      const first = arr[0];
+      const isLegacyFlat =
+        first &&
+        typeof first === "object" &&
+        !("conditions" in first) &&
+        ("field" in first || "op" in first || "value" in first);
+      if (isLegacyFlat) {
+        return [
+          {
+            match: "all",
+            conditions: arr.map((c) => ({
+              field: c.field || "hostname",
+              op: c.op || "contains",
+              value: c.value || "",
+            })),
+          },
+        ];
+      }
+      return arr.map((g) => ({
+        match: g.match || "all",
+        conditions: (g.conditions || []).length
+          ? g.conditions.map((c) => ({
+              field: c.field || "hostname",
+              op: c.op || "contains",
+              value: c.value || "",
+            }))
+          : [newCondition()],
+      }));
+    }
+    function addGroup() {
+      form.value.filters.push(newGroup());
+    }
+    function removeGroup(gidx) {
+      form.value.filters.splice(gidx, 1);
+      if (form.value.filters.length === 0) form.value.filters.push(newGroup());
+      previewTargets();
+    }
+    function addCondition(gidx) {
+      form.value.filters[gidx].conditions.push(newCondition());
+    }
+    function removeCondition(gidx, cidx) {
+      form.value.filters[gidx].conditions.splice(cidx, 1);
+      if (form.value.filters[gidx].conditions.length === 0)
+        form.value.filters[gidx].conditions.push(newCondition());
       previewTargets();
     }
     const monTypeOptions = [
@@ -557,7 +707,8 @@ export default {
         agent_ids: [],
         mon_type: "all",
         os_type: "all",
-        filters: [],
+        filters: [newGroup()],
+        filter_match: "any",
         schedule_type: "daily",
         interval_hours: 24,
         run_time: "03:00",
@@ -576,6 +727,8 @@ export default {
     }
     function editCmd(row) {
       form.value = { ...blankForm(), ...row };
+      form.value.filters = normalizeFilters(row.filters);
+      form.value.filter_match = row.filter_match || "any";
       dialog.value = true;
       previewTargets();
     }
@@ -588,6 +741,7 @@ export default {
           site: form.value.site,
           agent_ids: form.value.agent_ids,
           filters: form.value.filters,
+          filter_match: form.value.filter_match,
           mon_type: form.value.mon_type,
           os_type: form.value.os_type,
         });
@@ -635,6 +789,39 @@ export default {
         notifyError("Failed to delete");
       }
     }
+    function stopCmd(row) {
+      $q.dialog({
+        title: "Stop bulk AI command",
+        message: `Abort any in-flight runs for "${row.name}" and disable it? This halts token spend for this command immediately.`,
+        cancel: true,
+        ok: { label: "Stop", color: "negative" },
+      }).onOk(async () => {
+        try {
+          const r = await stopBulkAICommand(row.id);
+          notifySuccess(r?.detail || "Stopped");
+          await load();
+        } catch (e) {
+          notifyError("Failed to stop");
+        }
+      });
+    }
+    function stopAll() {
+      $q.dialog({
+        title: "Emergency stop ALL AI runs",
+        message:
+          "Immediately abort every in-flight AI run (bulk and scheduled) and stop token spend now. Schedules are not disabled. Continue?",
+        cancel: true,
+        ok: { label: "Stop everything", color: "negative" },
+      }).onOk(async () => {
+        try {
+          const r = await stopAllAIRuns();
+          notifySuccess(r?.detail || "All AI runs stopped");
+          await load();
+        } catch (e) {
+          notifyError("Failed to stop");
+        }
+      });
+    }
 
     onMounted(async () => {
       loadModels();
@@ -656,8 +843,11 @@ export default {
       columns,
       filterFieldOptions,
       filterOpOptions,
-      addFilter,
-      removeFilter,
+      matchOptions,
+      addGroup,
+      removeGroup,
+      addCondition,
+      removeCondition,
       targetOptions,
       monTypeOptions,
       osTypeOptions,
@@ -676,6 +866,8 @@ export default {
       saveForm,
       saveAndRun,
       runNow,
+      stopCmd,
+      stopAll,
       removeCmd,
     };
   },
@@ -686,6 +878,11 @@ export default {
 .pi-faded {
   opacity: 0.55;
   font-size: 0.9em;
+}
+.pi-filter-group {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
 }
 .pi-matched {
   max-height: 220px;

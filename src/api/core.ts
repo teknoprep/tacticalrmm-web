@@ -225,6 +225,16 @@ export async function deleteBulkAICommand(id: number) {
   const { data } = await axios.delete(`${baseUrl}/ai/bulk/${id}/`);
   return data;
 }
+export async function stopBulkAICommand(id: number) {
+  const { data } = await axios.post(`${baseUrl}/ai/bulk/${id}/stop/`);
+  return data;
+}
+
+export async function stopAllAIRuns() {
+  const { data } = await axios.post(`${baseUrl}/ai/stop-all/`);
+  return data;
+}
+
 export async function runBulkAICommandNow(id: number) {
   const { data } = await axios.post(`${baseUrl}/ai/bulk/${id}/run/`);
   return data;

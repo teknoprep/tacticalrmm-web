@@ -59,6 +59,17 @@
         @click="startNewChat"
       />
       <q-badge
+        v-if="readOnly"
+        color="blue-grey"
+        label="read-only"
+        class="q-mr-sm"
+      >
+        <q-tooltip>
+          This session can only inspect devices. Changes require an account with
+          AI write (mutate) rights.
+        </q-tooltip>
+      </q-badge>
+      <q-badge
         :color="connected ? 'green' : 'red'"
         :label="connected ? 'connected' : 'disconnected'"
       />
@@ -315,6 +326,7 @@ export default {
     const selectedModel = ref(null);
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
+    const readOnly = ref(false);
     // Queue of approval requests. A single turn (especially multi-machine) can
     // fire several gated tool calls in parallel; the bridge sends one
     // approval_request per call, so we must queue them, not overwrite - else
@@ -502,6 +514,7 @@ export default {
             markActivity();
             if (m.type === "ready") {
               curSessionId = m.session_id || curSessionId;
+              readOnly.value = !!m.read_only;
               // hydrate history
               messages.value = [];
               currentIdx = -1;
@@ -691,6 +704,7 @@ export default {
       selectedModel,
       autoApprove,
       autoapproveAllowed,
+      readOnly,
       pendingApproval,
       approvalQueue,
       respondApprovalAll,

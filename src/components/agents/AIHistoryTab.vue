@@ -26,7 +26,7 @@
         flat
         :pagination="{ rowsPerPage: 0, sortBy: 'when', descending: true }"
         hide-bottom
-        :style="{ height: tabHeight + 'px' }"
+        :style="{ 'max-height': tabHeight }"
         virtual-scroll
         @row-dblclick="onRowDblClick"
       >
@@ -100,7 +100,7 @@
 
     <!-- run transcript dialog -->
     <q-dialog v-model="runDialog">
-      <q-card style="width: 900px; max-width: 95vw">
+      <q-card class="pi-run-card">
         <q-bar class="bg-primary text-white">
           <q-icon name="smart_toy" />
           <div>{{ runRow.sourceLabel }}</div>
@@ -108,9 +108,9 @@
           <q-badge v-if="runRow.status" :color="statusColor(runRow.status)" :label="runRow.status" />
           <q-btn dense flat icon="close" v-close-popup class="q-ml-sm" />
         </q-bar>
-        <q-card-section>
+        <q-card-section class="col scroll">
           <div class="text-caption text-grey">{{ formatTime(runRow.when) }}</div>
-          <div class="text-weight-medium q-mt-xs">{{ runRow.summary }}</div>
+          <div class="text-weight-medium q-mt-xs pi-run-summary">{{ runRow.summary }}</div>
           <q-separator class="q-my-sm" />
           <pre class="pi-transcript">{{ runRow.output || "(no transcript)" }}</pre>
         </q-card-section>
@@ -291,19 +291,31 @@ export default {
   cursor: pointer;
 }
 .ai-history-table :deep(.q-table__middle) {
-  overflow-x: auto;
+  overflow: auto;
 }
 .ai-summary-cell {
   max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* the run/verdict ("alert") viewer: bound the card to the viewport and let the
+   whole body scroll, so long summaries + transcripts are always reachable */
+.pi-run-card {
+  width: 900px;
+  max-width: 95vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+.pi-run-summary {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .pi-transcript {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: monospace;
   font-size: 11px;
-  max-height: 55vh;
   overflow: auto;
   background: rgba(0, 0, 0, 0.05);
   padding: 8px;
