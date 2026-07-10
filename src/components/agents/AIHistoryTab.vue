@@ -18,6 +18,7 @@
       </div>
       <q-separator />
       <q-table
+        class="ai-history-table"
         :rows="rows"
         :columns="columns"
         row-key="key"
@@ -27,7 +28,20 @@
         hide-bottom
         :style="{ height: tabHeight + 'px' }"
         virtual-scroll
+        @row-dblclick="onRowDblClick"
       >
+        <template #body-cell-summary="props">
+          <q-td :props="props" class="ai-summary-cell">
+            {{ props.row.summary }}
+            <q-tooltip
+              v-if="(props.row.summary || '').length > 60"
+              max-width="500px"
+              :delay="300"
+            >
+              {{ props.row.summary }}
+            </q-tooltip>
+          </q-td>
+        </template>
         <template #body-cell-source="props">
           <q-td :props="props">
             <q-badge :color="sourceColor(props.row.source)" :label="props.row.sourceLabel" />
@@ -128,9 +142,16 @@ export default {
       { name: "source", label: "Source", field: "sourceLabel", align: "left", sortable: true },
       { name: "summary", label: "Summary", field: "summary", align: "left" },
       { name: "user", label: "By", field: "user", align: "left" },
-      { name: "when", label: "When", field: "when", align: "left", sortable: true },
+      {
+        name: "when",
+        label: "When",
+        field: "when",
+        align: "left",
+        sortable: true,
+        classes: "no-wrap",
+      },
       { name: "status", label: "Status", field: "status", align: "left" },
-      { name: "actions", label: "", field: "actions", align: "right" },
+      { name: "actions", label: "", field: "actions", align: "right", classes: "no-wrap" },
     ];
 
     function sourceColor(s) {
@@ -216,6 +237,12 @@ export default {
       runDialog.value = true;
     }
 
+    // double-click a row = its default action (Continue for chats, View for runs)
+    function onRowDblClick(_evt, row) {
+      if (row.source === "chat") continueChat(row.id);
+      else viewRun(row);
+    }
+
     watch(selectedAgent, () => load());
     onMounted(() => {
       if (selectedAgent.value) load();
@@ -236,12 +263,29 @@ export default {
       runDialog,
       runRow,
       viewRun,
+      onRowDblClick,
     };
   },
 };
 </script>
 
 <style scoped>
+/* keep rows single-line so the table width is stable and the horizontal
+   scrollbar (when needed) is always present and reachable */
+.ai-history-table :deep(td) {
+  white-space: nowrap;
+}
+.ai-history-table :deep(tbody tr) {
+  cursor: pointer;
+}
+.ai-history-table :deep(.q-table__middle) {
+  overflow-x: auto;
+}
+.ai-summary-cell {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pi-transcript {
   white-space: pre-wrap;
   word-break: break-word;

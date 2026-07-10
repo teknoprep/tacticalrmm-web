@@ -69,6 +69,37 @@ export async function createPiSession(agent_id, payload = {}) {
   return data;
 }
 
+// Multi-machine Pi.dev session: machines = [{agent_id, role}]
+export async function createPiMultiSession(payload = {}) {
+  const { data } = await axios.post(`${baseUrl}/pi/multisession/`, payload);
+  return data;
+}
+
+export function encodePiMachines(machines) {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(machines))));
+}
+
+export function decodePiMachines(encoded) {
+  return JSON.parse(decodeURIComponent(escape(atob(encoded))));
+}
+
+export function runPiMultiChat(machines, query = {}) {
+  const url = router.resolve({
+    path: "/pichat/multi",
+    query: { m: encodePiMachines(machines), ...query },
+  }).href;
+  openURL(url, null, {
+    popup: true,
+    scrollbars: true,
+    location: false,
+    status: false,
+    toolbar: false,
+    menubar: false,
+    width: 1200,
+    height: 900,
+  });
+}
+
 export async function fetchPiHistory(agent_id) {
   const { data } = await axios.get(`${baseUrl}/${agent_id}/pi/history/`);
   return data;

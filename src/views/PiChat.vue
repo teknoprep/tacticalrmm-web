@@ -5,13 +5,27 @@
       <q-icon name="smart_toy" size="sm" class="q-mr-sm" />
       <div class="column">
         <div class="text-subtitle2">
-          Pi.dev &mdash; {{ hostname || agentId }}
+          Pi.dev &mdash; {{ hostname || (isMulti ? "multi-machine" : agentId) }}
         </div>
         <div class="text-caption text-grey-5">
           {{ clientSite }}
         </div>
       </div>
       <q-space />
+      <q-btn
+        flat
+        dense
+        no-caps
+        icon="lan"
+        :label="isMulti ? 'Machines' : 'Multi-machine'"
+        class="q-mr-sm"
+        @click="openMachinesDialog"
+      >
+        <q-tooltip>
+          Work on several machines in one conversation (e.g. cluster two
+          Proxmox nodes, or pair a Proxmox server with its Backup Server)
+        </q-tooltip>
+      </q-btn>
       <q-select
         v-model="selectedModel"
         :options="modelOptions"
@@ -105,6 +119,89 @@
       </div>
     </div>
 
+    <!-- multi-machine setup dialog -->
+    <q-dialog v-model="machinesDialog">
+      <q-card dark class="bg-grey-9" style="width: 700px; max-width: 95vw">
+        <q-card-section class="row items-center q-pb-none">
+          <q-icon name="lan" size="sm" class="q-mr-sm" />
+          <div class="text-h6">Multi-machine mode</div>
+          <q-space />
+          <q-btn icon="close" flat round dense v-close-popup />
+        </q-card-section>
+        <q-card-section>
+          <div class="text-caption text-grey-5 q-mb-md">
+            Pick the machines for this session and tell Pi what each one is,
+            so it knows which machine each step belongs on &mdash; e.g.
+            "primary Proxmox node", "second cluster node", "Proxmox Backup
+            Server".
+          </div>
+          <div
+            v-for="(row, i) in machineRows"
+            :key="i"
+            class="row q-col-gutter-sm items-start q-mb-sm"
+          >
+            <div class="col-5">
+              <tactical-dropdown
+                v-model="row.agent_id"
+                :options="agentOptions"
+                label="Machine"
+                outlined
+                dense
+                dark
+                mapOptions
+                filterable
+              />
+            </div>
+            <div class="col-6">
+              <q-input
+                v-model="row.role"
+                dense
+                dark
+                outlined
+                label="What is this machine? (its role in the job)"
+                maxlength="400"
+              />
+            </div>
+            <div class="col-1 row justify-center">
+              <q-btn
+                flat
+                dense
+                round
+                icon="remove"
+                color="red"
+                :disable="machineRows.length <= 1"
+                @click="removeMachineRow(i)"
+              >
+                <q-tooltip>Remove this machine</q-tooltip>
+              </q-btn>
+            </div>
+          </div>
+          <q-btn
+            flat
+            dense
+            no-caps
+            icon="add"
+            label="Add machine"
+            color="primary"
+            :disable="machineRows.length >= 8"
+            @click="addMachineRow"
+          />
+          <div v-if="machinesError" class="text-caption text-red q-mt-sm">
+            {{ machinesError }}
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup />
+          <q-btn
+            color="primary"
+            no-caps
+            :label="isMulti ? 'Apply machines (new chat)' : 'Start multi-machine chat'"
+            @click="launchMulti"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- connection lost banner -->
     <q-banner v-if="connectionLost" class="bg-red-9 text-white">
       <template #avatar><q-icon name="wifi_off" /></template>
@@ -138,7 +235,9 @@
         dark
         dense
         outlined
-        placeholder="Ask about this device, or tell Pi what to do..."
+        :placeholder="isMulti
+          ? 'Tell Pi what to do across these machines...'
+          : 'Ask about this device, or tell Pi what to do...'"
         class="col"
         :disable="!connected"
         @keydown.enter.exact.prevent="send"
@@ -166,16 +265,36 @@
 
 <script>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { getBaseUrl } from "@/boot/axios";
-import { createPiSession } from "@/api/agents";
+import {
+  createPiSession,
+  createPiMultiSession,
+  decodePiMachines,
+  encodePiMachines,
+} from "@/api/agents";
+import { useAgentDropdown } from "@/composables/agents";
 import { notifyError } from "@/utils/notify";
+import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
 
 export default {
   name: "PiChat",
+  components: { TacticalDropdown },
   setup() {
     const route = useRoute();
+    const router = useRouter();
     const agentId = route.params.agent_id;
+    const isMulti = agentId === "multi";
+
+    // machines for a multi session, decoded from the ?m= query param
+    let multiMachines = [];
+    if (isMulti) {
+      try {
+        multiMachines = decodePiMachines(route.query.m || "");
+      } catch (e) {
+        multiMachines = [];
+      }
+    }
 
     const hostname = ref("");
     const clientSite = ref("");
@@ -321,10 +440,17 @@ export default {
         try { ws.close(); } catch (e) { /* noop */ }
         ws = null;
       }
-      createPiSession(agentId, {
-        ...(model_id ? { model_id } : {}),
-        ...(resume ? { resume_session: resume } : {}),
-      })
+      const create = isMulti
+        ? createPiMultiSession({
+            machines: multiMachines,
+            ...(model_id ? { model_id } : {}),
+            ...(resume ? { resume_session: resume } : {}),
+          })
+        : createPiSession(agentId, {
+            ...(model_id ? { model_id } : {}),
+            ...(resume ? { resume_session: resume } : {}),
+          });
+      create
         .then((data) => {
           hostname.value = data.hostname;
           clientSite.value = `${data.client} / ${data.site}`;
@@ -459,6 +585,59 @@ export default {
       connect({ model_id: selectedModel.value });
     }
 
+    // --- multi-machine setup dialog ----------------------------------------
+    const machinesDialog = ref(false);
+    const machineRows = ref([]);
+    const machinesError = ref("");
+    const { agentOptions, getAgentOptions } = useAgentDropdown();
+
+    function openMachinesDialog() {
+      machinesError.value = "";
+      if (agentOptions.value.length === 0) getAgentOptions();
+      if (isMulti && multiMachines.length) {
+        machineRows.value = multiMachines.map((m) => ({ ...m }));
+      } else if (machineRows.value.length === 0) {
+        // seed with the machine we were opened on, plus an empty row to add
+        machineRows.value = [
+          { agent_id: isMulti ? null : agentId, role: "" },
+          { agent_id: null, role: "" },
+        ];
+      }
+      machinesDialog.value = true;
+    }
+
+    function addMachineRow() {
+      if (machineRows.value.length < 8)
+        machineRows.value.push({ agent_id: null, role: "" });
+    }
+
+    function removeMachineRow(i) {
+      machineRows.value.splice(i, 1);
+    }
+
+    function launchMulti() {
+      const rows = machineRows.value.filter((r) => r.agent_id);
+      if (rows.length < 2) {
+        machinesError.value = "Select at least 2 machines (use + to add more).";
+        return;
+      }
+      const ids = rows.map((r) => r.agent_id);
+      if (new Set(ids).size !== ids.length) {
+        machinesError.value = "The same machine is selected more than once.";
+        return;
+      }
+      const machines = rows.map((r) => ({
+        agent_id: r.agent_id,
+        role: (r.role || "").trim(),
+      }));
+      // reload this popup as a fresh multi-machine chat
+      const href = router.resolve({
+        path: "/pichat/multi",
+        query: { m: encodePiMachines(machines) },
+      }).href;
+      window.location.assign(href);
+    }
+
     onMounted(() => {
       connect({ resume: route.query.resume, model_id: route.query.model });
       tickTimer = setInterval(() => {
@@ -488,6 +667,15 @@ export default {
       autoapproveAllowed,
       pendingApproval,
       scrollArea,
+      isMulti,
+      machinesDialog,
+      machineRows,
+      machinesError,
+      agentOptions,
+      openMachinesDialog,
+      addMachineRow,
+      removeMachineRow,
+      launchMulti,
       send,
       abort,
       respondApproval,
