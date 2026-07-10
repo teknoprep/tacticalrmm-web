@@ -211,11 +211,20 @@
       </template>
     </q-banner>
 
-    <!-- approval banner -->
+    <!-- approval banner (queued: parallel/multi-machine turns can raise several) -->
     <q-banner v-if="pendingApproval" class="bg-orange-9 text-white">
       <template #avatar><q-icon name="warning" /></template>
+      <span v-if="approvalQueue.length > 1" class="text-weight-bold q-mr-xs">
+        ({{ approvalQueue.length }} pending)
+      </span>
       Pi wants to run: <strong>{{ pendingApproval.summary }}</strong>
       <template #action>
+        <q-btn
+          v-if="approvalQueue.length > 1"
+          flat
+          label="Approve all"
+          @click="respondApprovalAll(true)"
+        />
         <q-btn flat label="Deny" @click="respondApproval(false)" />
         <q-btn
           flat
@@ -306,7 +315,12 @@ export default {
     const selectedModel = ref(null);
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
-    const pendingApproval = ref(null);
+    // Queue of approval requests. A single turn (especially multi-machine) can
+    // fire several gated tool calls in parallel; the bridge sends one
+    // approval_request per call, so we must queue them, not overwrite - else
+    // the un-shown ones hang forever waiting on approval.
+    const approvalQueue = ref([]);
+    const pendingApproval = computed(() => approvalQueue.value[0] || null);
     const scrollArea = ref(null);
     const connectionLost = ref(false);
 
@@ -506,7 +520,7 @@ export default {
             } else if (m.type === "agent_event") {
               handleAgentEvent(m.event);
             } else if (m.type === "approval_request") {
-              pendingApproval.value = { id: m.id, summary: m.summary };
+              approvalQueue.value = [...approvalQueue.value, { id: m.id, summary: m.summary }];
               markActivity();
             } else if (m.type === "autoapprove_state") {
               autoApprove.value = m.value;
@@ -556,15 +570,27 @@ export default {
     }
 
     function respondApproval(ok) {
-      if (pendingApproval.value && ws) {
+      const cur = approvalQueue.value[0];
+      if (cur && ws) {
         ws.send(
           JSON.stringify({
             type: ok ? "approve" : "deny",
-            id: pendingApproval.value.id,
+            id: cur.id,
           }),
         );
       }
-      pendingApproval.value = null;
+      // pop the one we just answered; the next (if any) shows automatically
+      approvalQueue.value = approvalQueue.value.slice(1);
+    }
+
+    // Approve everything currently queued (handy for multi-machine turns).
+    function respondApprovalAll(ok) {
+      if (ws) {
+        for (const a of approvalQueue.value) {
+          ws.send(JSON.stringify({ type: ok ? "approve" : "deny", id: a.id }));
+        }
+      }
+      approvalQueue.value = [];
     }
 
     function sendAutoApprove(val) {
@@ -666,6 +692,8 @@ export default {
       autoApprove,
       autoapproveAllowed,
       pendingApproval,
+      approvalQueue,
+      respondApprovalAll,
       scrollArea,
       isMulti,
       machinesDialog,

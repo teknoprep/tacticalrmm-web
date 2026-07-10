@@ -68,7 +68,7 @@
               color="primary"
               label="Continue"
               no-caps
-              @click="continueChat(props.row.id)"
+              @click="continueChat(props.row)"
             />
             <q-btn
               v-else
@@ -126,6 +126,7 @@ import {
   fetchPiHistory,
   deletePiHistory,
   runPiChat,
+  runPiMultiChat,
 } from "@/api/agents";
 import { fetchAIRunsByAgent } from "@/api/core";
 import { notifyError } from "@/utils/notify";
@@ -179,11 +180,13 @@ export default {
             key: "chat:" + s.session_id,
             id: s.session_id,
             source: "chat",
-            sourceLabel: "Chat",
+            sourceLabel: s.multi ? "Chat (multi)" : "Chat",
             summary: s.last_message || s.name || "Chat",
             user: s.user || "",
             when: s.last_activity || s.started,
             status: "",
+            multi: !!s.multi,
+            machines: s.machines || null,
           });
         });
       } catch (e) {
@@ -215,8 +218,17 @@ export default {
       rows.value = merged;
     }
 
-    function continueChat(sessionId) {
-      runPiChat(selectedAgent.value, { resume: sessionId });
+    function continueChat(row) {
+      // Multi-machine chats must resume with their full machine set, otherwise
+      // the resumed session is scoped to the primary machine only.
+      if (row.multi && Array.isArray(row.machines) && row.machines.length > 1) {
+        runPiMultiChat(
+          row.machines.map((m) => ({ agent_id: m.agent_id, role: m.role || "" })),
+          { resume: row.id },
+        );
+      } else {
+        runPiChat(selectedAgent.value, { resume: row.id });
+      }
     }
     function newChat() {
       runPiChat(selectedAgent.value);
@@ -239,7 +251,7 @@ export default {
 
     // double-click a row = its default action (Continue for chats, View for runs)
     function onRowDblClick(_evt, row) {
-      if (row.source === "chat") continueChat(row.id);
+      if (row.source === "chat") continueChat(row);
       else viewRun(row);
     }
 
