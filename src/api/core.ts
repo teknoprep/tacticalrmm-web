@@ -213,6 +213,17 @@ export async function fetchAIRunsByAgent(agentId: string) {
   return data;
 }
 
+// Scope = { client: <id> } or { site: <id> }
+export async function fetchAIRunsByScope(scope: { client?: number; site?: number }) {
+  const { data } = await axios.get(`${baseUrl}/ai/runs/`, { params: scope });
+  return data;
+}
+
+export async function fetchAIHistoryScope(scope: { client?: number; site?: number }) {
+  const { data } = await axios.get(`${baseUrl}/ai/history-scope/`, { params: scope });
+  return data;
+}
+
 // Bulk AI Commands
 export async function fetchBulkAICommands() {
   const { data } = await axios.get(`${baseUrl}/ai/bulk/`);

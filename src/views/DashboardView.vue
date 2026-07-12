@@ -82,6 +82,17 @@
                         <q-item-section>Delete</q-item-section>
                       </q-item>
 
+                      <q-item
+                        clickable
+                        v-close-popup
+                        @click="showAIHistory(props.node)"
+                      >
+                        <q-item-section side>
+                          <q-icon name="smart_toy" />
+                        </q-item-section>
+                        <q-item-section>AI History</q-item-section>
+                      </q-item>
+
                       <q-separator></q-separator>
 
                       <q-item
@@ -222,6 +233,12 @@
                 </div>
               </template>
             </q-tree>
+            <AIHistoryScope
+              v-model="aiHistShow"
+              :client="aiHistClient"
+              :site="aiHistSite"
+              :label="aiHistLabel"
+            />
           </q-list>
         </div>
       </template>
@@ -459,6 +476,7 @@ import FileBar from "@/components/FileBar.vue";
 import AgentTable from "@/components/AgentTable.vue";
 import NetworkDevicesTable from "@/components/netdevices/NetworkDevicesTable.vue";
 import SubTableTabs from "@/components/SubTableTabs.vue";
+import AIHistoryScope from "@/components/agents/AIHistoryScope.vue";
 import PolicyAdd from "@/components/automation/modals/PolicyAdd.vue";
 import ClientsForm from "@/components/clients/ClientsForm.vue";
 import SitesForm from "@/components/clients/SitesForm.vue";
@@ -478,6 +496,7 @@ export default {
     SubTableTabs,
     InstallAgent,
     IntegrationsContextMenu,
+    AIHistoryScope,
   },
   // allow child components to refresh table
   provide() {
@@ -493,6 +512,10 @@ export default {
   data() {
     return {
       showInstallAgentModal: false,
+      aiHistShow: false,
+      aiHistClient: null,
+      aiHistSite: null,
+      aiHistLabel: "",
       sitePk: null,
       innerModel: (this.$q.screen.height - 82) / 2,
       search: this.$route.query.search ? this.$route.query.search : "",
@@ -679,6 +702,17 @@ export default {
           },
         })
         .onOk(() => this.$store.dispatch("loadTree"));
+    },
+    showAIHistory(node) {
+      if (node.client) {
+        this.aiHistClient = node.id;
+        this.aiHistSite = null;
+      } else {
+        this.aiHistSite = node.id;
+        this.aiHistClient = null;
+      }
+      this.aiHistLabel = node.label;
+      this.aiHistShow = true;
     },
     showEditModal(node) {
       let props = {};
