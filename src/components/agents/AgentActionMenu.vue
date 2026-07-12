@@ -55,6 +55,19 @@
       <q-item-section>Remote Proxy</q-item-section>
     </q-item>
 
+    <!-- Pi.dev AI assistant -->
+    <q-item
+      clickable
+      v-ripple
+      v-close-popup
+      @click="launchPiChat(agent.agent_id)"
+    >
+      <q-item-section side>
+        <q-icon size="xs" name="smart_toy" />
+      </q-item-section>
+      <q-item-section>Pi.dev</q-item-section>
+    </q-item>
+
     <q-item clickable v-ripple :disable="urlActions.length === 0">
       <q-item-section side>
         <q-icon size="xs" name="open_in_new" />
@@ -272,6 +285,7 @@ import {
   runTakeControl,
   runWebVNC,
   runRemoteProxy,
+  runPiChat,
   wakeUpWOL,
 } from "@/api/agents";
 import { runAgentUpdateScan, runAgentUpdateInstall } from "@/api/winupdates";
@@ -448,6 +462,10 @@ export default {
       runRemoteProxy(agent_id);
     }
 
+    function launchPiChat(agent_id) {
+      runPiChat(agent_id);
+    }
+
     function launchWebVNC(agent_id) {
       $q.dialog({
         title: "VNC Server Port",
@@ -612,6 +630,7 @@ export default {
       wakeUp,
       launchWebVNC,
       launchRemoteProxy,
+      launchPiChat,
     };
   },
 };

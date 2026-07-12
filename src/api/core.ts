@@ -102,3 +102,149 @@ export async function generateScript(payload: any) {
   const { data } = await axios.post(`${baseUrl}/openai/generate/`, payload);
   return data;
 }
+
+// Pi.dev AI providers & models
+export async function fetchAIProviders() {
+  const { data } = await axios.get(`${baseUrl}/ai/providers/`);
+  return data;
+}
+
+export async function saveAIProvider(provider: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/providers/`, provider);
+  return data;
+}
+
+export async function editAIProvider(id: number, provider: Record<string, unknown>) {
+  const { data } = await axios.put(`${baseUrl}/ai/providers/${id}/`, provider);
+  return data;
+}
+
+export async function deleteAIProvider(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/providers/${id}/`);
+  return data;
+}
+
+export async function fetchAIModels() {
+  const { data } = await axios.get(`${baseUrl}/ai/models/`);
+  return data;
+}
+
+export async function saveAIModel(model: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/models/`, model);
+  return data;
+}
+
+export async function editAIModel(id: number, model: Record<string, unknown>) {
+  const { data } = await axios.put(`${baseUrl}/ai/models/${id}/`, model);
+  return data;
+}
+
+export async function deleteAIModel(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/models/${id}/`);
+  return data;
+}
+
+export async function fetchAvailableAIModels() {
+  const { data } = await axios.get(`${baseUrl}/ai/available-models/`);
+  return data;
+}
+
+// Scheduled Pi AI Tasks
+export async function fetchAITasks(agentId?: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/tasks/`, {
+    params: agentId ? { agent_id: agentId } : {},
+  });
+  return data;
+}
+
+// Aggregate: all tasks for a client or site (company-wide view)
+export async function fetchAITasksByScope(scope: {
+  client?: string | null;
+  site?: string | null;
+}) {
+  const params: Record<string, string> = {};
+  if (scope.site) params.site = scope.site;
+  else if (scope.client) params.client = scope.client;
+  const { data } = await axios.get(`${baseUrl}/ai/tasks/`, { params });
+  return data;
+}
+
+export async function saveAITask(task: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/tasks/`, task);
+  return data;
+}
+
+export async function editAITask(id: number, task: Record<string, unknown>) {
+  const { data } = await axios.put(`${baseUrl}/ai/tasks/${id}/`, task);
+  return data;
+}
+
+export async function deleteAITask(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/tasks/${id}/`);
+  return data;
+}
+
+export async function runAITaskNow(id: number) {
+  const { data } = await axios.post(`${baseUrl}/ai/tasks/${id}/run/`);
+  return data;
+}
+
+export async function fetchAITaskRuns(taskId: number) {
+  const { data } = await axios.get(`${baseUrl}/ai/runs/`, {
+    params: { task_id: taskId },
+  });
+  return data;
+}
+
+export async function fetchAITaskRunLive(runId: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/runs/${runId}/live/`);
+  return data;
+}
+
+export async function fetchAIRunsByAgent(agentId: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/runs/`, {
+    params: { agent_id: agentId },
+  });
+  return data;
+}
+
+// Bulk AI Commands
+export async function fetchBulkAICommands() {
+  const { data } = await axios.get(`${baseUrl}/ai/bulk/`);
+  return data;
+}
+export async function saveBulkAICommand(cmd: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/bulk/`, cmd);
+  return data;
+}
+export async function editBulkAICommand(id: number, cmd: Record<string, unknown>) {
+  const { data } = await axios.put(`${baseUrl}/ai/bulk/${id}/`, cmd);
+  return data;
+}
+export async function deleteBulkAICommand(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/bulk/${id}/`);
+  return data;
+}
+export async function stopBulkAICommand(id: number) {
+  const { data } = await axios.post(`${baseUrl}/ai/bulk/${id}/stop/`);
+  return data;
+}
+
+export async function stopAllAIRuns() {
+  const { data } = await axios.post(`${baseUrl}/ai/stop-all/`);
+  return data;
+}
+
+export async function fetchBulkAICommandResults(id: number) {
+  const { data } = await axios.get(`${baseUrl}/ai/bulk/${id}/results/`);
+  return data;
+}
+
+export async function runBulkAICommandNow(id: number) {
+  const { data } = await axios.post(`${baseUrl}/ai/bulk/${id}/run/`);
+  return data;
+}
+export async function previewBulkAITargets(payload: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/bulk/preview/`, payload);
+  return data;
+}
