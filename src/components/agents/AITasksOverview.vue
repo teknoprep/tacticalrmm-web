@@ -60,6 +60,18 @@
               <q-icon name="dns" size="xs" class="q-mr-xs" />{{ props.row.hostname }}
             </q-td>
           </template>
+          <template #body-cell-by="props">
+            <q-td :props="props">
+              {{ props.row.modified_by || props.row.created_by || "—" }}
+              <q-tooltip v-if="props.row.created_by || props.row.modified_by">
+                Created by {{ props.row.created_by || "unknown" }}<span
+                  v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
+                >
+                  &middot; Last edited by {{ props.row.modified_by }}</span
+                >
+              </q-tooltip>
+            </q-td>
+          </template>
           <template #body-cell-schedule="props">
             <q-td :props="props">{{ scheduleText(props.row) }}</q-td>
           </template>
@@ -213,6 +225,7 @@ export default {
       { name: "name", label: "Task", field: "name", align: "left", sortable: true },
       { name: "schedule", label: "Schedule", field: "schedule", align: "left" },
       { name: "model_display", label: "Model", field: "model_display", align: "left" },
+      { name: "by", label: "By", field: (r) => r.modified_by || r.created_by || "", align: "left", sortable: true },
       { name: "last_run", label: "Last run", field: "last_run", align: "left", sortable: true },
       {
         name: "last_status",
