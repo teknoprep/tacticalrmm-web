@@ -126,6 +126,10 @@
               <q-item clickable v-close-popup @click="showBulkAction('script')">
                 <q-item-section>Bulk Script</q-item-section>
               </q-item>
+              <!-- bulk AI command -->
+              <q-item clickable v-close-popup @click="showBulkAICommands">
+                <q-item-section>Bulk AI Command</q-item-section>
+              </q-item>
               <!-- bulk patch management -->
               <q-item clickable v-close-popup @click="showBulkAction('patch')">
                 <q-item-section>Bulk Patch Management</q-item-section>
@@ -272,6 +276,7 @@ import AdminManager from "@/components/AdminManager.vue";
 import InstallAgent from "@/components/modals/agents/InstallAgent.vue";
 import AuditManager from "@/components/logs/AuditManager.vue";
 import BulkAction from "@/components/modals/agents/BulkAction.vue";
+import BulkAICommands from "@/components/agents/BulkAICommands.vue";
 import DeploymentTable from "@/components/clients/DeploymentTable.vue";
 import ServerMaintenance from "@/components/modals/core/ServerMaintenance.vue";
 import CodeSign from "@/components/modals/coresettings/CodeSign.vue";
@@ -406,6 +411,9 @@ export default {
       this.$q.dialog({
         component: ScriptManager,
       });
+    },
+    showBulkAICommands() {
+      this.$q.dialog({ component: BulkAICommands });
     },
     showBulkAction(mode) {
       this.$q.dialog({
