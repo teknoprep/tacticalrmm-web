@@ -149,6 +149,11 @@ export async function fetchAvailableAIModels() {
   return data;
 }
 
+export async function helpdeskAssist(messages: { role: string; content: string }[]) {
+  const { data } = await axios.post(`${baseUrl}/ai/helpdesk-assist/`, { messages });
+  return data as { reply: string };
+}
+
 // Scheduled Pi AI Tasks
 export async function fetchAITasks(agentId?: string) {
   const { data } = await axios.get(`${baseUrl}/ai/tasks/`, {
