@@ -98,6 +98,148 @@
       </template>
     </q-table>
 
+    <!-- helpdesk / ticketing integration (below providers + models) -->
+    <div class="row items-center q-mt-lg">
+      <div class="text-subtitle2">Helpdesk / Ticketing Integration</div>
+      <q-space />
+      <q-btn
+        dense
+        no-caps
+        color="primary"
+        icon="smart_toy"
+        label="Use AI to Help Create These"
+        @click="openAssist"
+      />
+    </div>
+    <q-separator class="q-mb-sm" />
+    <div class="row q-col-gutter-sm q-mb-sm">
+      <div class="col-7">
+        <q-input
+          :model-value="settings.ai_helpdesk_api_base_url"
+          outlined
+          dense
+          label="Ticketing API base URL (e.g. https://erp.example.com)"
+          @update:model-value="update('ai_helpdesk_api_base_url', $event)"
+        />
+      </div>
+      <div class="col-5">
+        <q-input
+          :model-value="settings.ai_helpdesk_api_key"
+          outlined
+          dense
+          type="password"
+          label="Ticketing API key"
+          @update:model-value="update('ai_helpdesk_api_key', $event)"
+        />
+      </div>
+    </div>
+
+    <div class="text-caption text-weight-medium q-mt-sm">Helpdesk Ticket Policy (prompt)</div>
+    <q-input
+      :model-value="settings.ai_helpdesk_prompt"
+      type="textarea"
+      outlined
+      autogrow
+      input-style="min-height: 140px"
+      label="When/how the AI should ticket, and which operations to call"
+      @update:model-value="update('ai_helpdesk_prompt', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Natural-language policy: <em>when</em> to open tickets and <em>which operations</em>
+      (defined by the code below) to call. Injected into every AI session and scheduled run.
+    </div>
+
+    <div class="text-caption text-weight-medium">Helpdesk Integration Code (helpdesk.js)</div>
+    <q-input
+      :model-value="settings.ai_helpdesk_code"
+      type="textarea"
+      outlined
+      input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
+      label="JavaScript defining exports.operations for your ticketing system"
+      @update:model-value="update('ai_helpdesk_code', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Deterministic integration for <strong>any</strong> helpdesk/ERP. Define
+      <code>exports.operations</code> (e.g. create_ticket, reply_to_ticket, add_note,
+      submit_report, resolve_customer), plus optional <code>exports.meta</code> and
+      <code>exports.mutating</code>. In scope: <code>helpdesk.baseUrl</code>,
+      <code>helpdesk.apiKey</code>, <code>fetch</code>. The API key stays server-side and is
+      scrubbed from anything the AI sees. The example targets Odoo/Softhealer &mdash; edit it
+      for Zendesk / Freshdesk / etc. Saved with the main <strong>Save</strong> button.
+    </div>
+
+    <!-- AI helpdesk-setup assistant -->
+    <q-dialog v-model="assistDialog">
+      <q-card style="min-width: 760px; max-width: 92vw">
+        <q-card-section class="row items-center">
+          <div class="text-subtitle1">AI Helpdesk Integration Builder</div>
+          <q-space />
+          <q-btn dense flat icon="close" v-close-popup />
+        </q-card-section>
+        <q-separator />
+        <q-card-section style="max-height: 55vh; overflow-y: auto">
+          <div v-if="assistMessages.length === 0" class="text-grey text-caption q-mb-sm">
+            The AI will interview you about your helpdesk/ticketing system, then draft the
+            Policy and helpdesk.js for you to review and apply. Click <strong>Send</strong>
+            to start, or type what system you use.
+          </div>
+          <div v-for="(m, i) in assistMessages" :key="i">
+            <q-chat-message
+              :text="[m.text]"
+              :sent="m.role === 'user'"
+              :bg-color="m.role === 'user' ? 'blue-2' : 'grey-3'"
+            />
+            <div v-if="m.policy || m.code" class="q-gutter-xs q-mb-md">
+              <q-btn
+                v-if="m.policy"
+                dense
+                no-caps
+                size="sm"
+                color="teal"
+                icon="check"
+                label="Apply to Policy box"
+                @click="applyPolicy(m.policy)"
+              />
+              <q-btn
+                v-if="m.code"
+                dense
+                no-caps
+                size="sm"
+                color="deep-purple"
+                icon="check"
+                label="Apply to Code box"
+                @click="applyCode(m.code)"
+              />
+            </div>
+          </div>
+          <div v-if="assistLoading" class="text-grey text-caption">
+            <q-spinner-dots size="1.5em" /> thinking…
+          </div>
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="row q-gutter-sm items-center">
+          <q-input
+            v-model="assistInput"
+            outlined
+            dense
+            autogrow
+            class="col"
+            type="textarea"
+            input-style="max-height: 120px"
+            placeholder="Answer the AI, or describe your helpdesk… (Enter to send)"
+            @keydown.enter.exact.prevent="sendAssist"
+          />
+          <q-btn
+            color="primary"
+            icon="send"
+            :loading="assistLoading"
+            :disable="assistLoading"
+            @click="sendAssist"
+          />
+        </q-card-section>
+      </q-card>
+    </q-dialog>
+
     <!-- provider dialog -->
     <q-dialog v-model="providerDialog">
       <q-card style="min-width: 400px">
@@ -218,6 +360,7 @@ import {
   editAIModel,
   deleteAIModel,
   fetchAvailableAIModels,
+  helpdeskAssist,
 } from "@/api/core";
 import { notifySuccess, notifyError } from "@/utils/notify";
 
@@ -228,7 +371,71 @@ export default {
   },
   emits: ["update"],
   setup(props, { emit }) {
+    const apiKeyPlaceholder = "{{HELPDESK_API_KEY}}";
     const providers = ref([]);
+
+    // ---- AI helpdesk-setup assistant ----
+    const assistDialog = ref(false);
+    const assistMessages = ref([]);
+    const assistInput = ref("");
+    const assistLoading = ref(false);
+    function openAssist() {
+      assistDialog.value = true;
+    }
+    function parseProposal(reply) {
+      const extract = (start, end) => {
+        const i = reply.indexOf(start);
+        if (i < 0) return null;
+        const j = reply.indexOf(end, i + start.length);
+        if (j < 0) return null;
+        return reply.slice(i + start.length, j).trim();
+      };
+      const policy = extract("===POLICY START===", "===POLICY END===");
+      const code = extract("===CODE START===", "===CODE END===");
+      let text = reply
+        .replace(/===POLICY START===[\s\S]*?===POLICY END===/g, "")
+        .replace(/===CODE START===[\s\S]*?===CODE END===/g, "")
+        .trim();
+      if (!text) text = policy || code ? "(proposed updates below — review and apply)" : "";
+      return { text, policy, code };
+    }
+    async function sendAssist() {
+      if (assistLoading.value) return;
+      const content =
+        assistInput.value.trim() ||
+        (assistMessages.value.length === 0 ? "Help me set up my helpdesk integration." : "");
+      if (!content) return;
+      assistMessages.value.push({ role: "user", text: content, raw: content });
+      assistInput.value = "";
+      assistLoading.value = true;
+      try {
+        const convo = assistMessages.value.map((m) => ({
+          role: m.role,
+          content: m.raw || m.text,
+        }));
+        const { reply } = await helpdeskAssist(convo);
+        const parsed = parseProposal(reply || "");
+        assistMessages.value.push({
+          role: "assistant",
+          text: parsed.text || reply || "(no response)",
+          raw: reply,
+          policy: parsed.policy,
+          code: parsed.code,
+        });
+      } catch (e) {
+        notifyError("Assistant request failed");
+      } finally {
+        assistLoading.value = false;
+      }
+    }
+    function applyPolicy(p) {
+      emit("update", { key: "ai_helpdesk_prompt", val: p });
+      notifySuccess("Applied to Policy box — click Save to persist");
+    }
+    function applyCode(c) {
+      emit("update", { key: "ai_helpdesk_code", val: c });
+      notifySuccess("Applied to Code box — click Save to persist");
+    }
     const models = ref([]);
 
     const providerColumns = [
@@ -406,6 +613,15 @@ export default {
     onMounted(loadAll);
 
     return {
+      apiKeyPlaceholder,
+      assistDialog,
+      assistMessages,
+      assistInput,
+      assistLoading,
+      openAssist,
+      sendAssist,
+      applyPolicy,
+      applyCode,
       providers,
       models,
       providerColumns,

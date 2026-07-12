@@ -106,9 +106,23 @@
           <div>{{ runRow.sourceLabel }}</div>
           <q-space />
           <q-badge v-if="runRow.status" :color="statusColor(runRow.status)" :label="runRow.status" />
+          <q-btn
+            dense
+            flat
+            no-caps
+            icon="auto_fix_high"
+            label="AI Resolve"
+            class="q-ml-sm"
+            @click="aiResolve(runRow)"
+          >
+            <q-tooltip>
+              Open a read-only Pi chat that gathers info and proposes fix options
+              for this finding (change nothing until you enable write mode)
+            </q-tooltip>
+          </q-btn>
           <q-btn dense flat icon="close" v-close-popup class="q-ml-sm" />
         </q-bar>
-        <q-card-section class="col scroll">
+        <q-card-section class="pi-run-body">
           <div class="text-caption text-grey">{{ formatTime(runRow.when) }}</div>
           <div class="text-weight-medium q-mt-xs pi-run-summary">{{ runRow.summary }}</div>
           <q-separator class="q-my-sm" />
@@ -199,6 +213,7 @@ export default {
           merged.push({
             key: "run:" + r.id,
             id: r.id,
+            run_id: r.run_id,
             source: r.source, // 'task' | 'bulk'
             sourceLabel:
               r.source === "bulk"
@@ -249,6 +264,11 @@ export default {
       runDialog.value = true;
     }
 
+    // open a read-only Pi chat seeded with this finding to propose fix options
+    function aiResolve(row) {
+      runPiChat(selectedAgent.value, { resolve_run: row.run_id });
+    }
+
     // double-click a row = its default action (Continue for chats, View for runs)
     function onRowDblClick(_evt, row) {
       if (row.source === "chat") continueChat(row);
@@ -275,6 +295,7 @@ export default {
       runDialog,
       runRow,
       viewRun,
+      aiResolve,
       onRowDblClick,
     };
   },
@@ -306,6 +327,14 @@ export default {
   max-height: 90vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+/* the scrollable body: min-height:0 is REQUIRED so this flex child can shrink
+   below its content height and actually scroll (without it the card just clips) */
+.pi-run-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .pi-run-summary {
   white-space: pre-wrap;

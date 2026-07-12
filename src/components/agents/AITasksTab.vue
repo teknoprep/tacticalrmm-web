@@ -58,6 +58,18 @@
             <q-icon name="dns" size="xs" class="q-mr-xs" />{{ props.row.hostname }}
           </q-td>
         </template>
+        <template #body-cell-by="props">
+          <q-td :props="props">
+            {{ props.row.modified_by || props.row.created_by || "—" }}
+            <q-tooltip v-if="props.row.created_by || props.row.modified_by">
+              Created by {{ props.row.created_by || "unknown" }}<span
+                v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
+              >
+                &middot; Last edited by {{ props.row.modified_by }}</span
+              >
+            </q-tooltip>
+          </q-td>
+        </template>
         <template #body-cell-enabled="props">
           <q-td :props="props">
             <q-icon
@@ -333,6 +345,21 @@
                 <div class="text-caption text-grey">
                   {{ formatTime(selectedRun.started_at) }} · {{ selectedRun.triggered_by }}
                 </div>
+                <q-space />
+                <q-btn
+                  dense
+                  flat
+                  no-caps
+                  color="deep-orange"
+                  icon="auto_fix_high"
+                  label="AI Resolve"
+                  @click="aiResolve(selectedRun)"
+                >
+                  <q-tooltip>
+                    Open a read-only Pi chat on this device that proposes fix
+                    options for this finding
+                  </q-tooltip>
+                </q-btn>
               </div>
               <div class="text-weight-medium q-mb-sm">{{ selectedRun.summary }}</div>
               <q-separator class="q-mb-sm" />
@@ -416,6 +443,7 @@ import {
   fetchAITaskRuns,
   fetchAITaskRunLive,
 } from "@/api/core";
+import { runPiChat } from "@/api/agents";
 import { notifySuccess, notifyError } from "@/utils/notify";
 
 export default {
@@ -466,6 +494,7 @@ export default {
         { name: "schedule", label: "Schedule", field: "schedule", align: "left" },
         { name: "model_display", label: "Model", field: "model_display", align: "left" },
         { name: "alert_threshold", label: "Alert", field: "alert_threshold", align: "left" },
+        { name: "by", label: "By", field: (r) => r.modified_by || r.created_by || "", align: "left", sortable: true },
         { name: "last_run", label: "Last run", field: "last_run", align: "left", sortable: true },
         { name: "last_status", label: "Status", field: "last_status_rank", align: "left", sortable: true },
         { name: "enabled", label: "On", field: "enabled", align: "center" },
@@ -642,6 +671,10 @@ export default {
     function selectRun(r) {
       selectedRun.value = r;
     }
+    function aiResolve(r) {
+      if (!r || !r.device_id) return;
+      runPiChat(r.device_id, { resolve_run: r.run_id });
+    }
 
     // ---- live ----
     const liveDialog = ref(false);
@@ -728,6 +761,7 @@ export default {
       selectedRun,
       openHistory,
       loadHistory,
+      aiResolve,
       selectRun,
       liveDialog,
       liveState,

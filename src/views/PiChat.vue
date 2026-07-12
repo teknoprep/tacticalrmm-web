@@ -58,8 +58,23 @@
         class="q-mr-sm"
         @click="startNewChat"
       />
+      <!-- toggle when the role can write; static badge when it can't -->
+      <q-toggle
+        v-if="mutateAllowed"
+        :model-value="!readOnly"
+        dense
+        color="deep-orange"
+        :label="readOnly ? 'Read-only' : 'Write mode'"
+        class="q-mr-sm"
+        @update:model-value="(v) => setReadonly(!v)"
+      >
+        <q-tooltip>
+          Read-only gathers info and proposes fixes without changing anything.
+          Switch to Write mode to let Pi apply changes.
+        </q-tooltip>
+      </q-toggle>
       <q-badge
-        v-if="readOnly"
+        v-else-if="readOnly"
         color="blue-grey"
         label="read-only"
         class="q-mr-sm"
@@ -293,6 +308,7 @@ import {
   decodePiMachines,
   encodePiMachines,
 } from "@/api/agents";
+import { fetchAITaskRunLive } from "@/api/core";
 import { useAgentDropdown } from "@/composables/agents";
 import { notifyError } from "@/utils/notify";
 import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
@@ -327,6 +343,46 @@ export default {
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
     const readOnly = ref(false);
+    const mutateAllowed = ref(false);
+    const resolveRun = route.query.resolve_run || null;
+    let resolveSeeded = false;
+    function setReadonly(val) {
+      if (ws && connected.value) {
+        ws.send(JSON.stringify({ type: "set_readonly", value: !!val }));
+      }
+    }
+    // For an "AI Resolve" session: once ready, pull the run's finding and send a
+    // seed prompt asking for read-only fix OPTIONS.
+    async function maybeSeedResolve() {
+      if (!resolveRun || resolveSeeded) return;
+      resolveSeeded = true;
+      let finding = "";
+      try {
+        const data = await fetchAITaskRunLive(resolveRun);
+        const r = data?.run || {};
+        finding =
+          `Summary: ${r.summary || "(none)"}\n\n` +
+          `Details / transcript:\n${(r.output || "").slice(0, 8000)}`;
+      } catch (e) {
+        finding = "(could not load the original finding)";
+      }
+      const seed =
+        "A scheduled AI check on this device reported an issue. DO NOT change " +
+        "anything on the device right now — this is a read-only diagnostic. " +
+        "Investigate read-only as needed, then give me a few concrete OPTIONS to " +
+        "fix it, each with exact steps and pros/cons, so I can choose. " +
+        "If you need to apply a fix, tell me and I'll enable write mode.\n\n" +
+        "=== FINDING ===\n" +
+        finding;
+      if (!connected.value) return;
+      messages.value.push({ role: "user", text: seed });
+      currentIdx = -1;
+      streaming.value = true;
+      streamStartAt.value = Date.now();
+      markActivity();
+      ws.send(JSON.stringify({ type: "prompt", message: seed }));
+      scrollToBottom();
+    }
     // Queue of approval requests. A single turn (especially multi-machine) can
     // fire several gated tool calls in parallel; the bridge sends one
     // approval_request per call, so we must queue them, not overwrite - else
@@ -475,6 +531,7 @@ export default {
         : createPiSession(agentId, {
             ...(model_id ? { model_id } : {}),
             ...(resume ? { resume_session: resume } : {}),
+            ...(resolveRun ? { read_only: true } : {}),
           });
       create
         .then((data) => {
@@ -515,6 +572,8 @@ export default {
             if (m.type === "ready") {
               curSessionId = m.session_id || curSessionId;
               readOnly.value = !!m.read_only;
+              mutateAllowed.value = !!m.mutate_allowed;
+              maybeSeedResolve();
               // hydrate history
               messages.value = [];
               currentIdx = -1;
@@ -537,6 +596,15 @@ export default {
               markActivity();
             } else if (m.type === "autoapprove_state") {
               autoApprove.value = m.value;
+            } else if (m.type === "readonly_state") {
+              readOnly.value = m.value;
+              messages.value.push({
+                role: "system",
+                text: m.value
+                  ? "Switched to READ-ONLY mode."
+                  : "Switched to WRITE mode — Pi can now apply changes (with approval).",
+              });
+              scrollToBottom();
             } else if (m.type === "model_changed") {
               selectedModel.value = m.model_id;
               messages.value.push({
@@ -705,6 +773,8 @@ export default {
       autoApprove,
       autoapproveAllowed,
       readOnly,
+      mutateAllowed,
+      setReadonly,
       pendingApproval,
       approvalQueue,
       respondApprovalAll,

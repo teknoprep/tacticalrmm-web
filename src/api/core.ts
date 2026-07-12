@@ -149,6 +149,11 @@ export async function fetchAvailableAIModels() {
   return data;
 }
 
+export async function helpdeskAssist(messages: { role: string; content: string }[]) {
+  const { data } = await axios.post(`${baseUrl}/ai/helpdesk-assist/`, { messages });
+  return data as { reply: string };
+}
+
 // Scheduled Pi AI Tasks
 export async function fetchAITasks(agentId?: string) {
   const { data } = await axios.get(`${baseUrl}/ai/tasks/`, {
@@ -205,6 +210,17 @@ export async function fetchAIRunsByAgent(agentId: string) {
   const { data } = await axios.get(`${baseUrl}/ai/runs/`, {
     params: { agent_id: agentId },
   });
+  return data;
+}
+
+// Scope = { client: <id> } or { site: <id> }
+export async function fetchAIRunsByScope(scope: { client?: number; site?: number }) {
+  const { data } = await axios.get(`${baseUrl}/ai/runs/`, { params: scope });
+  return data;
+}
+
+export async function fetchAIHistoryScope(scope: { client?: number; site?: number }) {
+  const { data } = await axios.get(`${baseUrl}/ai/history-scope/`, { params: scope });
   return data;
 }
 

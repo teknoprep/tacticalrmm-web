@@ -35,6 +35,18 @@
           hide-bottom
           @row-dblclick="(e, row) => editCmd(row)"
         >
+          <template #body-cell-by="props">
+            <q-td :props="props">
+              {{ props.row.modified_by || props.row.created_by || "—" }}
+              <q-tooltip v-if="props.row.created_by || props.row.modified_by">
+                Created by {{ props.row.created_by || "unknown" }}<span
+                  v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
+                >
+                  &middot; Last edited by {{ props.row.modified_by }}</span
+                >
+              </q-tooltip>
+            </q-td>
+          </template>
           <template #body-cell-enabled="props">
             <q-td :props="props">
               <q-icon
@@ -94,6 +106,15 @@
               type="textarea"
               autogrow
               label="Prompt / instructions (runs on each targeted device)"
+            />
+            <q-input
+              v-model="form.report_prompt"
+              outlined
+              dense
+              type="textarea"
+              autogrow
+              label="Combined report instructions (optional)"
+              hint="If set, runs ONCE after all machines finish - given every machine's result - to compile a single report/ticket (e.g. one 'all OK' summary). Leave empty for no combined report."
             />
             <q-select
               v-model="form.model"
@@ -531,7 +552,23 @@
                     {{ formatTime(selectedResult.started_at) }} · {{ selectedResult.triggered_by }}
                   </div>
                 </div>
-                <div class="text-weight-medium q-mb-sm">{{ selectedResult.summary }}</div>
+                <div class="row items-center q-mb-sm">
+                  <div class="text-weight-medium col">{{ selectedResult.summary }}</div>
+                  <q-btn
+                    dense
+                    flat
+                    no-caps
+                    color="deep-orange"
+                    icon="auto_fix_high"
+                    label="AI Resolve"
+                    @click="aiResolve(selectedResult)"
+                  >
+                    <q-tooltip>
+                      Open a read-only Pi chat on this computer that proposes fix
+                      options for this finding
+                    </q-tooltip>
+                  </q-btn>
+                </div>
                 <q-separator class="q-mb-sm" />
                 <pre class="pi-transcript">{{ selectedResult.output || "(no transcript)" }}</pre>
               </div>
@@ -562,7 +599,7 @@ import {
   fetchAIModels,
 } from "@/api/core";
 import { useClientDropdown, useSiteDropdown } from "@/composables/clients";
-import { fetchAgents } from "@/api/agents";
+import { fetchAgents, runPiChat } from "@/api/agents";
 import { notifySuccess, notifyError } from "@/utils/notify";
 
 export default {
@@ -614,6 +651,7 @@ export default {
       { name: "schedule", label: "Schedule", field: "schedule", align: "left" },
       { name: "model_display", label: "Model", field: "model_display", align: "left" },
       { name: "alert_threshold", label: "Alert", field: "alert_threshold", align: "left" },
+      { name: "by", label: "By", field: (r) => r.modified_by || r.created_by || "", align: "left", sortable: true },
       { name: "last_run", label: "Last run", field: "last_run", align: "left" },
       { name: "enabled", label: "On", field: "enabled", align: "center" },
       { name: "actions", label: "", field: "actions", align: "right" },
@@ -774,6 +812,10 @@ export default {
     const resultsCmd = ref({});
     const results = ref([]);
     const selectedResult = ref(null);
+    function aiResolve(r) {
+      if (!r || !r.device_id) return;
+      runPiChat(r.device_id, { resolve_run: r.run_id });
+    }
     function openResults(row) {
       resultsCmd.value = row;
       selectedResult.value = null;
@@ -821,6 +863,7 @@ export default {
       return {
         name: "",
         prompt: "",
+        report_prompt: "",
         model: null,
         run_mode: "schedule",
         target: "all",
@@ -1002,6 +1045,7 @@ export default {
       selectedResult,
       openResults,
       loadResults,
+      aiResolve,
     };
   },
 };
