@@ -107,6 +107,15 @@
               autogrow
               label="Prompt / instructions (runs on each targeted device)"
             />
+            <q-input
+              v-model="form.report_prompt"
+              outlined
+              dense
+              type="textarea"
+              autogrow
+              label="Combined report instructions (optional)"
+              hint="If set, runs ONCE after all machines finish - given every machine's result - to compile a single report/ticket (e.g. one 'all OK' summary). Leave empty for no combined report."
+            />
             <q-select
               v-model="form.model"
               :options="modelOptions"
@@ -854,6 +863,7 @@ export default {
       return {
         name: "",
         prompt: "",
+        report_prompt: "",
         model: null,
         run_mode: "schedule",
         target: "all",
