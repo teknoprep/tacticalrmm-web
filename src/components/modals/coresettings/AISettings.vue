@@ -26,50 +26,6 @@
       Providers and models are saved immediately.
     </div>
 
-    <!-- helpdesk ticket policy prompt -->
-    <div class="text-subtitle2 q-mt-md">Helpdesk Ticket Policy</div>
-    <q-separator class="q-mb-sm" />
-    <div class="row q-col-gutter-sm q-mb-sm">
-      <div class="col-7">
-        <q-input
-          :model-value="settings.ai_helpdesk_api_base_url"
-          outlined
-          dense
-          label="Ticketing API base URL (e.g. https://erp.example.com)"
-          @update:model-value="update('ai_helpdesk_api_base_url', $event)"
-        />
-      </div>
-      <div class="col-5">
-        <q-input
-          :model-value="settings.ai_helpdesk_api_key"
-          outlined
-          dense
-          type="password"
-          label="Ticketing API key"
-          @update:model-value="update('ai_helpdesk_api_key', $event)"
-        />
-      </div>
-    </div>
-    <q-input
-      :model-value="settings.ai_helpdesk_prompt"
-      type="textarea"
-      outlined
-      autogrow
-      input-style="min-height: 120px"
-      label="Helpdesk prompt (injected into every AI session and scheduled run)"
-      placeholder="Document BOTH when to open tickets AND how: the exact API calls (endpoints, payloads) the AI must make via the helpdesk_api_request tool. Write {{HELPDESK_API_KEY}} wherever the key belongs in request bodies."
-      @update:model-value="update('ai_helpdesk_prompt', $event)"
-    />
-    <div class="text-caption text-grey q-mb-md">
-      This text fully defines the ticketing integration: <em>when</em> to open tickets and
-      <em>how</em> (the exact API flow), executed via the generic
-      <code>helpdesk_api_request</code> tool against the base URL above. The API key is
-      substituted server-side for <code>{{ apiKeyPlaceholder }}</code> in request bodies and is
-      never placed in the AI's context. Requests can only go to the configured base URL.
-      Switching ticketing systems = change URL, key and this text. Saved with the main
-      <strong>Save</strong> button.
-    </div>
-
     <!-- providers -->
     <div class="row items-center q-mb-xs">
       <div class="text-subtitle2">Providers</div>
@@ -141,6 +97,65 @@
         </q-td>
       </template>
     </q-table>
+
+    <!-- helpdesk / ticketing integration (below providers + models) -->
+    <div class="text-subtitle2 q-mt-lg">Helpdesk / Ticketing Integration</div>
+    <q-separator class="q-mb-sm" />
+    <div class="row q-col-gutter-sm q-mb-sm">
+      <div class="col-7">
+        <q-input
+          :model-value="settings.ai_helpdesk_api_base_url"
+          outlined
+          dense
+          label="Ticketing API base URL (e.g. https://erp.example.com)"
+          @update:model-value="update('ai_helpdesk_api_base_url', $event)"
+        />
+      </div>
+      <div class="col-5">
+        <q-input
+          :model-value="settings.ai_helpdesk_api_key"
+          outlined
+          dense
+          type="password"
+          label="Ticketing API key"
+          @update:model-value="update('ai_helpdesk_api_key', $event)"
+        />
+      </div>
+    </div>
+
+    <div class="text-caption text-weight-medium q-mt-sm">Helpdesk Ticket Policy (prompt)</div>
+    <q-input
+      :model-value="settings.ai_helpdesk_prompt"
+      type="textarea"
+      outlined
+      autogrow
+      input-style="min-height: 140px"
+      label="When/how the AI should ticket, and which operations to call"
+      @update:model-value="update('ai_helpdesk_prompt', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Natural-language policy: <em>when</em> to open tickets and <em>which operations</em>
+      (defined by the code below) to call. Injected into every AI session and scheduled run.
+    </div>
+
+    <div class="text-caption text-weight-medium">Helpdesk Integration Code (helpdesk.js)</div>
+    <q-input
+      :model-value="settings.ai_helpdesk_code"
+      type="textarea"
+      outlined
+      input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
+      label="JavaScript defining exports.operations for your ticketing system"
+      @update:model-value="update('ai_helpdesk_code', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Deterministic integration for <strong>any</strong> helpdesk/ERP. Define
+      <code>exports.operations</code> (e.g. create_ticket, reply_to_ticket, add_note,
+      submit_report, resolve_customer), plus optional <code>exports.meta</code> and
+      <code>exports.mutating</code>. In scope: <code>helpdesk.baseUrl</code>,
+      <code>helpdesk.apiKey</code>, <code>fetch</code>. The API key stays server-side and is
+      scrubbed from anything the AI sees. The example targets Odoo/Softhealer &mdash; edit it
+      for Zendesk / Freshdesk / etc. Saved with the main <strong>Save</strong> button.
+    </div>
 
     <!-- provider dialog -->
     <q-dialog v-model="providerDialog">
