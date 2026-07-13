@@ -1,11 +1,14 @@
 <template>
   <div>
-    <div v-if="!selectedAgent" class="q-pa-sm">No agent selected</div>
+    <div v-if="mode === 'none'" class="q-pa-sm text-grey">
+      Select an agent, client, or site to see its AI history.
+    </div>
     <div v-else>
       <div class="row items-center q-pa-sm">
-        <div class="text-subtitle2">AI History</div>
+        <div class="text-subtitle2">AI History{{ scopeTitle }}</div>
         <q-space />
         <q-btn
+          v-if="mode === 'agent'"
           dense
           flat
           icon="add"
@@ -14,7 +17,7 @@
           color="primary"
           @click="newChat"
         />
-        <q-btn dense flat icon="refresh" @click="load" />
+        <q-btn dense flat icon="refresh" :loading="loading" @click="load" />
       </div>
       <q-separator />
       <q-table
@@ -24,12 +27,18 @@
         row-key="key"
         dense
         flat
+        :loading="loading"
         :pagination="{ rowsPerPage: 0, sortBy: 'when', descending: true }"
         hide-bottom
         :style="{ 'max-height': tabHeight }"
         virtual-scroll
         @row-dblclick="onRowDblClick"
       >
+        <template #body-cell-machine="props">
+          <q-td :props="props">
+            <q-icon name="dns" size="xs" class="q-mr-xs" />{{ props.row.machine || "—" }}
+          </q-td>
+        </template>
         <template #body-cell-summary="props">
           <q-td :props="props" class="ai-summary-cell">
             {{ props.row.summary }}
@@ -87,14 +96,14 @@
               size="sm"
               icon="delete"
               color="red"
-              @click="removeChat(props.row.id)"
+              @click="removeChat(props.row)"
             />
           </q-td>
         </template>
       </q-table>
-      <div v-if="rows.length === 0" class="q-pa-md text-grey">
-        No AI activity yet for this device. Start a chat (Pi.dev), or it will
-        appear here when a scheduled task or Bulk AI Command runs.
+      <div v-if="rows.length === 0 && !loading" class="q-pa-md text-grey">
+        No AI activity yet. Start a chat (Pi.dev), or it will appear here when a
+        scheduled task or Bulk AI Command runs.
       </div>
     </div>
 
@@ -107,6 +116,7 @@
           <q-space />
           <q-badge v-if="runRow.status" :color="statusColor(runRow.status)" :label="runRow.status" />
           <q-btn
+            v-if="runRow.agentId"
             dense
             flat
             no-caps
@@ -123,7 +133,9 @@
           <q-btn dense flat icon="close" v-close-popup class="q-ml-sm" />
         </q-bar>
         <q-card-section class="pi-run-body">
-          <div class="text-caption text-grey">{{ formatTime(runRow.when) }}</div>
+          <div class="text-caption text-grey">
+            {{ runRow.machine ? runRow.machine + " · " : "" }}{{ formatTime(runRow.when) }}
+          </div>
           <div class="text-weight-medium q-mt-xs pi-run-summary">{{ runRow.summary }}</div>
           <q-separator class="q-my-sm" />
           <pre class="pi-transcript">{{ runRow.output || "(no transcript)" }}</pre>
@@ -142,7 +154,11 @@ import {
   runPiChat,
   runPiMultiChat,
 } from "@/api/agents";
-import { fetchAIRunsByAgent } from "@/api/core";
+import {
+  fetchAIRunsByAgent,
+  fetchAIRunsByScope,
+  fetchAIHistoryScope,
+} from "@/api/core";
 import { notifyError } from "@/utils/notify";
 
 export default {
@@ -150,24 +166,41 @@ export default {
   setup() {
     const store = useStore();
     const selectedAgent = computed(() => store.state.selectedRow);
+    const selectedTree = computed(() => store.state.selectedTree || "");
     const tabHeight = computed(() => store.state.tabHeight);
     const rows = ref([]);
+    const loading = ref(false);
 
-    const columns = [
-      { name: "source", label: "Source", field: "sourceLabel", align: "left", sortable: true },
-      { name: "summary", label: "Summary", field: "summary", align: "left" },
-      { name: "user", label: "By", field: "user", align: "left" },
-      {
-        name: "when",
-        label: "When",
-        field: "when",
-        align: "left",
-        sortable: true,
-        classes: "no-wrap",
-      },
-      { name: "status", label: "Status", field: "status", align: "left" },
-      { name: "actions", label: "", field: "actions", align: "right", classes: "no-wrap" },
-    ];
+    // client/site scope derived from the dashboard tree selection
+    const scope = computed(() => {
+      const t = selectedTree.value;
+      if (t.startsWith("Client|")) return { client: t.split("|")[1] };
+      if (t.startsWith("Site|")) return { site: t.split("|")[1] };
+      return null;
+    });
+    // agent takes precedence (selecting a tree node clears the selected agent)
+    const mode = computed(() =>
+      selectedAgent.value ? "agent" : scope.value ? "scope" : "none",
+    );
+    const scopeTitle = computed(() => {
+      if (mode.value !== "scope") return "";
+      return scope.value.client ? " — client overview" : " — site overview";
+    });
+
+    const columns = computed(() => {
+      const cols = [];
+      if (mode.value === "scope")
+        cols.push({ name: "machine", label: "Machine", field: "machine", align: "left", sortable: true });
+      cols.push(
+        { name: "source", label: "Source", field: "sourceLabel", align: "left", sortable: true },
+        { name: "summary", label: "Summary", field: "summary", align: "left" },
+        { name: "user", label: "By", field: "user", align: "left" },
+        { name: "when", label: "When", field: "when", align: "left", sortable: true, classes: "no-wrap" },
+        { name: "status", label: "Status", field: "status", align: "left" },
+        { name: "actions", label: "", field: "actions", align: "right", classes: "no-wrap" },
+      );
+      return cols;
+    });
 
     function sourceColor(s) {
       return { chat: "primary", task: "teal", bulk: "deep-purple" }[s] || "grey";
@@ -177,80 +210,94 @@ export default {
     }
     function formatTime(ts) {
       try {
-        return new Date(ts).toLocaleString();
+        return ts ? new Date(ts).toLocaleString() : "";
       } catch (e) {
         return ts;
       }
     }
 
+    function chatRow(s, agentId, machine) {
+      return {
+        key: "chat:" + s.session_id,
+        id: s.session_id,
+        agentId,
+        machine,
+        source: "chat",
+        sourceLabel: s.multi ? "Chat (multi)" : "Chat",
+        summary: s.last_message || s.name || "Chat",
+        user: s.user || "",
+        when: s.last_activity || s.started,
+        status: "",
+        multi: !!s.multi,
+        machines: s.machines || null,
+      };
+    }
+    function runRowFrom(r) {
+      return {
+        key: "run:" + r.id,
+        id: r.id,
+        run_id: r.run_id,
+        agentId: r.device_id || null,
+        machine: r.hostname || "",
+        source: r.source, // 'task' | 'bulk'
+        sourceLabel: r.source === "bulk" ? `Bulk: ${r.source_name}` : `Task: ${r.source_name}`,
+        summary: r.summary || "(running…)",
+        user: r.triggered_by || "",
+        when: r.started_at,
+        status: r.status,
+        output: r.output,
+      };
+    }
+
     async function load() {
-      if (!selectedAgent.value) return;
-      const merged = [];
-      // chat sessions
-      try {
-        const data = await fetchPiHistory(selectedAgent.value);
-        (data.sessions || []).forEach((s) => {
-          merged.push({
-            key: "chat:" + s.session_id,
-            id: s.session_id,
-            source: "chat",
-            sourceLabel: s.multi ? "Chat (multi)" : "Chat",
-            summary: s.last_message || s.name || "Chat",
-            user: s.user || "",
-            when: s.last_activity || s.started,
-            status: "",
-            multi: !!s.multi,
-            machines: s.machines || null,
-          });
-        });
-      } catch (e) {
-        /* noop */
+      const m = mode.value;
+      if (m === "none") {
+        rows.value = [];
+        return;
       }
-      // task + bulk runs
+      loading.value = true;
+      const merged = [];
       try {
-        const runs = await fetchAIRunsByAgent(selectedAgent.value);
-        runs.forEach((r) => {
-          merged.push({
-            key: "run:" + r.id,
-            id: r.id,
-            run_id: r.run_id,
-            source: r.source, // 'task' | 'bulk'
-            sourceLabel:
-              r.source === "bulk"
-                ? `Bulk: ${r.source_name}`
-                : `Task: ${r.source_name}`,
-            summary: r.summary || "(running…)",
-            user: r.triggered_by || "",
-            when: r.started_at,
-            status: r.status,
-            output: r.output,
-          });
-        });
+        if (m === "agent") {
+          const data = await fetchPiHistory(selectedAgent.value);
+          (data.sessions || []).forEach((s) => merged.push(chatRow(s, selectedAgent.value, "")));
+          const runs = await fetchAIRunsByAgent(selectedAgent.value);
+          runs.forEach((r) => merged.push(runRowFrom(r)));
+        } else {
+          // scope: client/site — aggregate across every machine
+          const data = await fetchAIHistoryScope(scope.value);
+          (data.sessions || []).forEach((s) =>
+            merged.push(chatRow(s, s.agent_id, s.hostname || s.agent_id || "")),
+          );
+          const runs = await fetchAIRunsByScope(scope.value);
+          runs.forEach((r) => merged.push(runRowFrom(r)));
+        }
       } catch (e) {
-        /* noop */
+        notifyError("Failed to load AI history");
       }
       merged.sort((a, b) => (b.when || "").localeCompare(a.when || ""));
       rows.value = merged;
+      loading.value = false;
     }
 
     function continueChat(row) {
-      // Multi-machine chats must resume with their full machine set, otherwise
-      // the resumed session is scoped to the primary machine only.
+      const agentId = row.agentId || selectedAgent.value;
       if (row.multi && Array.isArray(row.machines) && row.machines.length > 1) {
         runPiMultiChat(
           row.machines.map((m) => ({ agent_id: m.agent_id, role: m.role || "" })),
           { resume: row.id },
         );
-      } else {
-        runPiChat(selectedAgent.value, { resume: row.id });
+      } else if (agentId) {
+        runPiChat(agentId, { resume: row.id });
       }
     }
     function newChat() {
-      runPiChat(selectedAgent.value);
+      if (selectedAgent.value) runPiChat(selectedAgent.value);
     }
-    async function removeChat(sessionId) {
+    async function removeChat(row) {
+      const agentId = row.agentId || selectedAgent.value;
       try {
-        await deletePiHistory(selectedAgent.value, sessionId);
+        await deletePiHistory(agentId, row.id);
         await load();
       } catch (e) {
         notifyError("Failed to delete conversation");
@@ -263,27 +310,26 @@ export default {
       runRow.value = row;
       runDialog.value = true;
     }
-
-    // open a read-only Pi chat seeded with this finding to propose fix options
     function aiResolve(row) {
-      runPiChat(selectedAgent.value, { resolve_run: row.run_id });
+      const agentId = row.agentId || selectedAgent.value;
+      if (agentId) runPiChat(agentId, { resolve_run: row.run_id });
     }
 
-    // double-click a row = its default action (Continue for chats, View for runs)
     function onRowDblClick(_evt, row) {
       if (row.source === "chat") continueChat(row);
       else viewRun(row);
     }
 
-    watch(selectedAgent, () => load());
-    onMounted(() => {
-      if (selectedAgent.value) load();
-    });
+    watch([selectedAgent, selectedTree], () => load());
+    onMounted(() => load());
 
     return {
+      mode,
+      scopeTitle,
       selectedAgent,
       tabHeight,
       rows,
+      loading,
       columns,
       sourceColor,
       statusColor,
@@ -319,8 +365,6 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* the run/verdict ("alert") viewer: bound the card to the viewport and let the
-   whole body scroll, so long summaries + transcripts are always reachable */
 .pi-run-card {
   width: 900px;
   max-width: 95vw;
@@ -329,8 +373,6 @@ export default {
   flex-direction: column;
   overflow: hidden;
 }
-/* the scrollable body: min-height:0 is REQUIRED so this flex child can shrink
-   below its content height and actually scroll (without it the card just clips) */
 .pi-run-body {
   flex: 1 1 auto;
   min-height: 0;

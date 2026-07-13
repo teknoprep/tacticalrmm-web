@@ -20,6 +20,17 @@
         label="Persist chat history per device"
         @update:model-value="update('ai_persist_history', $event)"
       />
+      <q-checkbox
+        :model-value="settings.ai_alerts_only_on_ticket_error"
+        label="Only raise RMM alerts when a ticket can't be filed"
+        @update:model-value="update('ai_alerts_only_on_ticket_error', $event)"
+      >
+        <q-tooltip max-width="360px">
+          When on, scheduled AI tasks &amp; bulk AI commands do NOT raise a Tactical RMM
+          alert on warning/alert findings (tickets are the notification channel). An RMM
+          alert is raised ONLY if the AI failed to file its ticket, or the run errored.
+        </q-tooltip>
+      </q-checkbox>
     </q-card-section>
     <div class="text-caption text-grey q-mb-md">
       Remember to click <strong>Save</strong> below after changing these toggles.
