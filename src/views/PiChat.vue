@@ -574,18 +574,49 @@ export default {
               readOnly.value = !!m.read_only;
               mutateAllowed.value = !!m.mutate_allowed;
               maybeSeedResolve();
-              // hydrate history
+              // hydrate history — reconstruct the full transcript INCLUDING the
+              // command window (tool calls + their output), not just the text
+              // typed by the user and assistant. toolCall blocks live on the
+              // assistant message; their output arrives as separate
+              // {role:"toolResult", toolCallId, ...} messages that we match back.
               messages.value = [];
               currentIdx = -1;
+              const toolById = {};
               (m.history || []).forEach((hm) => {
                 if (hm.role === "user") {
                   const txt = typeof hm.content === "string"
                     ? hm.content
                     : (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-                  messages.value.push({ role: "user", text: txt });
+                  if (txt) messages.value.push({ role: "user", text: txt });
                 } else if (hm.role === "assistant") {
-                  const txt = (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-                  if (txt) messages.value.push({ role: "assistant", text: txt, tools: [], done: true });
+                  const content = Array.isArray(hm.content) ? hm.content : [];
+                  const txt = content.filter((c) => c.type === "text").map((c) => c.text).join("");
+                  const tools = content
+                    .filter((c) => c.type === "toolCall")
+                    .map((c) => {
+                      const tool = {
+                        id: c.id,
+                        name: c.name,
+                        args: c.arguments ? JSON.stringify(c.arguments, null, 2) : "",
+                        result: "",
+                        done: true,
+                        isError: false,
+                      };
+                      toolById[c.id] = tool;
+                      return tool;
+                    });
+                  if (txt || tools.length) {
+                    messages.value.push({ role: "assistant", text: txt, tools, done: true });
+                  }
+                } else if (hm.role === "toolResult") {
+                  const tool = toolById[hm.toolCallId];
+                  if (tool) {
+                    const txt = Array.isArray(hm.content)
+                      ? hm.content.filter((c) => c.type === "text").map((c) => c.text).join("\n")
+                      : (typeof hm.content === "string" ? hm.content : "");
+                    tool.result = txt.length > 4000 ? txt.slice(0, 4000) + "\n...(truncated)" : txt;
+                    tool.isError = !!hm.isError;
+                  }
                 }
               });
               scrollToBottom();

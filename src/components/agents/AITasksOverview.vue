@@ -117,6 +117,9 @@
               <q-btn dense flat size="sm" icon="history" @click="openHistory(props.row)">
                 <q-tooltip>Run history</q-tooltip>
               </q-btn>
+              <q-btn dense flat size="sm" icon="delete" color="red" @click="remove(props.row)">
+                <q-tooltip>Delete task</q-tooltip>
+              </q-btn>
             </q-td>
           </template>
         </q-table>
@@ -198,10 +201,11 @@
 
 <script>
 import { ref, computed, onMounted } from "vue";
-import { useDialogPluginComponent } from "quasar";
+import { useDialogPluginComponent, useQuasar } from "quasar";
 import {
   fetchAITasksByScope,
   runAITaskNow,
+  deleteAITask,
   fetchAITaskRuns,
 } from "@/api/core";
 import { runPiChat } from "@/api/agents";
@@ -291,6 +295,28 @@ export default {
       }
     }
 
+    const $q = useQuasar();
+    function remove(row) {
+      $q.dialog({
+        title: "Delete AI task",
+        message: `Delete "${row.name}" on ${row.hostname}? This cannot be undone.`,
+        cancel: true,
+        ok: { label: "Delete", color: "negative" },
+      }).onOk(async () => {
+        try {
+          await deleteAITask(row.id);
+          notifySuccess("AI task deleted");
+          load();
+        } catch (e) {
+          notifyError(
+            e?.response?.status === 403
+              ? "You don't have permission to delete this task"
+              : "Failed to delete",
+          );
+        }
+      });
+    }
+
     // history
     const historyDialog = ref(false);
     const historyTask = ref({});
@@ -331,6 +357,7 @@ export default {
       formatTime,
       load,
       runNow,
+      remove,
       historyDialog,
       historyTask,
       runs,
