@@ -154,6 +154,21 @@ export async function helpdeskAssist(messages: { role: string; content: string }
   return data as { reply: string };
 }
 
+export async function getDeviceNotes(agentId: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/device-note/`, {
+    params: { agent_id: agentId },
+  });
+  return data as { agent_id: string; notes: string };
+}
+
+export async function saveDeviceNotes(agentId: string, notes: string) {
+  const { data } = await axios.put(`${baseUrl}/ai/device-note/`, {
+    agent_id: agentId,
+    notes,
+  });
+  return data as { ok: boolean; notes: string };
+}
+
 export async function aiPromptAssist(payload: {
   messages: { role: string; content: string }[];
   kind: "single" | "bulk";
