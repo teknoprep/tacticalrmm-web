@@ -92,6 +92,79 @@
       </q-card-section>
 
       <!-- create / edit dialog -->
+      <!-- AI prompt-writing assistant -->
+      <q-dialog v-model="assistDialog">
+        <q-card style="min-width: 760px; max-width: 92vw">
+          <q-card-section class="row items-center">
+            <div class="text-subtitle1">AI Bulk Command Builder</div>
+            <q-space />
+            <q-btn dense flat icon="close" v-close-popup />
+          </q-card-section>
+          <q-separator />
+          <q-card-section style="max-height: 55vh; overflow-y: auto">
+            <div v-if="assistMessages.length === 0" class="text-grey text-caption q-mb-sm">
+              Tell the AI what you want this bulk command to do. It will interview you, then
+              draft the per-device <strong>Prompt</strong> and (if you want one) the
+              <strong>Combined report</strong> instruction for you to review and apply.
+              Click <strong>Send</strong> to start.
+            </div>
+            <div v-for="(m, i) in assistMessages" :key="i">
+              <q-chat-message
+                :text="[m.text]"
+                :sent="m.role === 'user'"
+                :bg-color="m.role === 'user' ? 'blue-2' : 'grey-3'"
+              />
+              <div v-if="m.prompt || m.report" class="q-gutter-xs q-mb-md">
+                <q-btn
+                  v-if="m.prompt"
+                  dense
+                  no-caps
+                  size="sm"
+                  color="primary"
+                  icon="check"
+                  label="Apply to Prompt"
+                  @click="applyAssistPrompt(m.prompt)"
+                />
+                <q-btn
+                  v-if="m.report"
+                  dense
+                  no-caps
+                  size="sm"
+                  color="teal"
+                  icon="check"
+                  label="Apply to Combined report"
+                  @click="applyAssistReport(m.report)"
+                />
+              </div>
+            </div>
+            <div v-if="assistLoading" class="text-grey text-caption">
+              <q-spinner-dots size="1.5em" /> thinking…
+            </div>
+          </q-card-section>
+          <q-separator />
+          <q-card-section class="row q-gutter-sm items-center">
+            <q-input
+              v-model="assistInput"
+              outlined
+              dense
+              autogrow
+              class="col"
+              type="textarea"
+              input-style="max-height: 120px"
+              placeholder="Answer the AI, or describe what you want… (Enter to send)"
+              @keydown.enter.exact.prevent="sendAssist"
+            />
+            <q-btn
+              color="primary"
+              icon="send"
+              :loading="assistLoading"
+              :disable="assistLoading"
+              @click="sendAssist"
+            />
+          </q-card-section>
+        </q-card>
+      </q-dialog>
+
       <q-dialog v-model="dialog">
         <q-card style="width: 720px; max-width: 95vw">
           <q-card-section class="text-subtitle1">
@@ -99,6 +172,20 @@
           </q-card-section>
           <q-card-section class="q-gutter-sm scroll" style="max-height: 74vh">
             <q-input v-model="form.name" outlined dense label="Name" />
+            <div class="row items-center q-mb-xs">
+              <q-space />
+              <q-btn
+                dense
+                no-caps
+                size="sm"
+                color="deep-purple"
+                icon="auto_awesome"
+                label="Help me write this with AI"
+                @click="openAssist"
+              >
+                <q-tooltip>Interview me and draft the prompt + combined report</q-tooltip>
+              </q-btn>
+            </div>
             <q-input
               v-model="form.prompt"
               outlined
@@ -597,6 +684,7 @@ import {
   fetchBulkAICommandResults,
   previewBulkAITargets,
   fetchAIModels,
+  aiPromptAssist,
 } from "@/api/core";
 import { useClientDropdown, useSiteDropdown } from "@/composables/clients";
 import { fetchAgents, runPiChat } from "@/api/agents";
@@ -996,11 +1084,88 @@ export default {
       await loadAgents();
     });
 
+    // ---- AI prompt-writing assistant ----
+    const assistDialog = ref(false);
+    const assistMessages = ref([]);
+    const assistInput = ref("");
+    const assistLoading = ref(false);
+    function openAssist() {
+      assistDialog.value = true;
+    }
+    function parseTaskProposal(reply) {
+      const extract = (start, end) => {
+        const i = reply.indexOf(start);
+        if (i < 0) return null;
+        const j = reply.indexOf(end, i + start.length);
+        if (j < 0) return null;
+        return reply.slice(i + start.length, j).trim();
+      };
+      const prompt = extract("===PROMPT START===", "===PROMPT END===");
+      const report = extract("===REPORT START===", "===REPORT END===");
+      let text = reply
+        .replace(/===PROMPT START===[\s\S]*?===PROMPT END===/g, "")
+        .replace(/===REPORT START===[\s\S]*?===REPORT END===/g, "")
+        .trim();
+      if (!text)
+        text = prompt || report ? "(proposed instructions below — review and apply)" : "";
+      return { text, prompt, report };
+    }
+    async function sendAssist() {
+      if (assistLoading.value) return;
+      const content =
+        assistInput.value.trim() ||
+        (assistMessages.value.length === 0
+          ? "Help me write a bulk AI command. " +
+            (form.value.prompt ? "Here is my current draft prompt: " + form.value.prompt : "")
+          : "");
+      if (!content) return;
+      assistMessages.value.push({ role: "user", text: content, raw: content });
+      assistInput.value = "";
+      assistLoading.value = true;
+      try {
+        const convo = assistMessages.value.map((m) => ({ role: m.role, content: m.raw || m.text }));
+        const { reply } = await aiPromptAssist({
+          messages: convo,
+          kind: "bulk",
+          current_prompt: form.value.prompt || "",
+          current_report: form.value.report_prompt || "",
+        });
+        const parsed = parseTaskProposal(reply || "");
+        assistMessages.value.push({
+          role: "assistant",
+          text: parsed.text || reply || "(no response)",
+          raw: reply,
+          prompt: parsed.prompt,
+          report: parsed.report,
+        });
+      } catch (e) {
+        notifyError("Assistant request failed");
+      } finally {
+        assistLoading.value = false;
+      }
+    }
+    function applyAssistPrompt(p) {
+      form.value.prompt = p;
+      notifySuccess("Applied to the Prompt field");
+    }
+    function applyAssistReport(r) {
+      form.value.report_prompt = r;
+      notifySuccess("Applied to the Combined report field");
+    }
+
     return {
       dialogRef,
       onDialogHide,
       cmds,
       modelOptions,
+      assistDialog,
+      assistMessages,
+      assistInput,
+      assistLoading,
+      openAssist,
+      sendAssist,
+      applyAssistPrompt,
+      applyAssistReport,
       preview,
       showMatched,
       clientOptions,

@@ -166,6 +166,20 @@
         </q-card-section>
         <q-card-section class="q-gutter-sm scroll" style="max-height: 70vh">
           <q-input v-model="form.name" outlined dense label="Task name" />
+          <div class="row items-center">
+            <q-space />
+            <q-btn
+              dense
+              no-caps
+              size="sm"
+              color="deep-purple"
+              icon="auto_awesome"
+              label="Help me write this with AI"
+              @click="openAssist"
+            >
+              <q-tooltip>Interview me and draft the prompt</q-tooltip>
+            </q-btn>
+          </div>
           <q-input
             v-model="form.prompt"
             outlined
@@ -175,6 +189,69 @@
             label="Prompt / instructions"
             hint="e.g. Check SQL Server performance. Alert on high wait times or latency over 1s, warn over 500ms."
           />
+
+          <q-dialog v-model="assistDialog">
+            <q-card style="min-width: 720px; max-width: 92vw">
+              <q-card-section class="row items-center">
+                <div class="text-subtitle1">AI Task Prompt Builder</div>
+                <q-space />
+                <q-btn dense flat icon="close" v-close-popup />
+              </q-card-section>
+              <q-separator />
+              <q-card-section style="max-height: 55vh; overflow-y: auto">
+                <div
+                  v-if="assistMessages.length === 0"
+                  class="text-grey text-caption q-mb-sm"
+                >
+                  Tell the AI what you want this task to check or do on the device. It will
+                  interview you, then draft the <strong>Prompt</strong> for you to review and
+                  apply. Click <strong>Send</strong> to start.
+                </div>
+                <div v-for="(m, i) in assistMessages" :key="i">
+                  <q-chat-message
+                    :text="[m.text]"
+                    :sent="m.role === 'user'"
+                    :bg-color="m.role === 'user' ? 'blue-2' : 'grey-3'"
+                  />
+                  <div v-if="m.prompt" class="q-gutter-xs q-mb-md">
+                    <q-btn
+                      dense
+                      no-caps
+                      size="sm"
+                      color="primary"
+                      icon="check"
+                      label="Apply to Prompt"
+                      @click="applyAssistPrompt(m.prompt)"
+                    />
+                  </div>
+                </div>
+                <div v-if="assistLoading" class="text-grey text-caption">
+                  <q-spinner-dots size="1.5em" /> thinking…
+                </div>
+              </q-card-section>
+              <q-separator />
+              <q-card-section class="row q-gutter-sm items-center">
+                <q-input
+                  v-model="assistInput"
+                  outlined
+                  dense
+                  autogrow
+                  class="col"
+                  type="textarea"
+                  input-style="max-height: 120px"
+                  placeholder="Answer the AI, or describe what you want… (Enter to send)"
+                  @keydown.enter.exact.prevent="sendAssist"
+                />
+                <q-btn
+                  color="primary"
+                  icon="send"
+                  :loading="assistLoading"
+                  :disable="assistLoading"
+                  @click="sendAssist"
+                />
+              </q-card-section>
+            </q-card>
+          </q-dialog>
           <q-select
             v-model="form.model"
             :options="modelOptions"
@@ -442,6 +519,7 @@ import {
   fetchAIModels,
   fetchAITaskRuns,
   fetchAITaskRunLive,
+  aiPromptAssist,
 } from "@/api/core";
 import { runPiChat } from "@/api/agents";
 import { notifySuccess, notifyError } from "@/utils/notify";
@@ -731,7 +809,70 @@ export default {
     });
     onBeforeUnmount(stopLivePoll);
 
+    // ---- AI prompt-writing assistant ----
+    const assistDialog = ref(false);
+    const assistMessages = ref([]);
+    const assistInput = ref("");
+    const assistLoading = ref(false);
+    function openAssist() {
+      assistDialog.value = true;
+    }
+    function parseTaskProposal(reply) {
+      const i = reply.indexOf("===PROMPT START===");
+      let prompt = null;
+      if (i >= 0) {
+        const j = reply.indexOf("===PROMPT END===", i);
+        if (j >= 0) prompt = reply.slice(i + "===PROMPT START===".length, j).trim();
+      }
+      let text = reply.replace(/===PROMPT START===[\s\S]*?===PROMPT END===/g, "").trim();
+      if (!text) text = prompt ? "(proposed prompt below — review and apply)" : "";
+      return { text, prompt };
+    }
+    async function sendAssist() {
+      if (assistLoading.value) return;
+      const content =
+        assistInput.value.trim() ||
+        (assistMessages.value.length === 0
+          ? "Help me write an AI task. " +
+            (form.value.prompt ? "Here is my current draft: " + form.value.prompt : "")
+          : "");
+      if (!content) return;
+      assistMessages.value.push({ role: "user", text: content, raw: content });
+      assistInput.value = "";
+      assistLoading.value = true;
+      try {
+        const convo = assistMessages.value.map((m) => ({ role: m.role, content: m.raw || m.text }));
+        const { reply } = await aiPromptAssist({
+          messages: convo,
+          kind: "single",
+          current_prompt: form.value.prompt || "",
+        });
+        const parsed = parseTaskProposal(reply || "");
+        assistMessages.value.push({
+          role: "assistant",
+          text: parsed.text || reply || "(no response)",
+          raw: reply,
+          prompt: parsed.prompt,
+        });
+      } catch (e) {
+        notifyError("Assistant request failed");
+      } finally {
+        assistLoading.value = false;
+      }
+    }
+    function applyAssistPrompt(p) {
+      form.value.prompt = p;
+      notifySuccess("Applied to the Prompt field");
+    }
+
     return {
+      assistDialog,
+      assistMessages,
+      assistInput,
+      assistLoading,
+      openAssist,
+      sendAssist,
+      applyAssistPrompt,
       mode,
       scope,
       headerText,
