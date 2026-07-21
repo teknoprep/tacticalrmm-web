@@ -295,7 +295,8 @@
     <div class="text-caption text-grey q-mb-sm">
       Anything NOT listed here is <strong>look-only</strong>: the AI triages it and leaves a note + a
       chat link for a human, but never auto-cancels, touches a device, or emails the customer.
-      Start with one or two trusted clients.
+      Start with one or two trusted clients. Enter <code>*</code> in either field to mean
+      <strong>EVERYONE / everything</strong> (auto-manage all clients &mdash; use only when you're ready).
     </div>
 
     <q-expansion-item dense dense-toggle icon="code" label="Advanced: raw scope JSON" class="q-mb-md">
