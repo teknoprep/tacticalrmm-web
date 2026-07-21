@@ -45,8 +45,19 @@
             </div>
           </div>
           <div v-if="sending" class="row justify-start">
-            <div class="q-pa-sm bg-grey-3 rounded-borders">
-              <q-spinner-dots color="primary" /> Pi is working…
+            <div class="q-pa-sm bg-grey-3 rounded-borders" style="min-width:260px">
+              <div class="row items-center q-mb-xs">
+                <q-spinner-dots color="primary" size="20px" class="q-mr-sm" />
+                <span class="text-weight-medium">{{ liveSteps.length ? "Pi is working…" : "Pi is thinking…" }}</span>
+              </div>
+              <div
+                v-for="(s, i) in liveSteps"
+                :key="i"
+                class="text-caption"
+                :class="i === liveSteps.length - 1 ? 'text-primary text-weight-medium' : 'text-grey-7'"
+              >
+                <q-icon :name="i === liveSteps.length - 1 ? 'sync' : 'check'" size="12px" class="q-mr-xs" />{{ s }}
+              </div>
             </div>
           </div>
         </q-card-section>
@@ -114,7 +125,7 @@
 <script>
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useRoute } from "vue-router";
-import { getAIDecision, replyAIDecision, closeAIDecision } from "@/api/core";
+import { getAIDecision, replyAIDecision, closeAIDecision, getAIDecisionStatus } from "@/api/core";
 import { notifyError, notifySuccess } from "@/utils/notify";
 
 export default {
@@ -132,6 +143,27 @@ export default {
     const scrollArea = ref(null);
     const allowDeviceChanges = ref(false);
     const allowCustomerReply = ref(false);
+    const liveSteps = ref([]);
+    let pollTimer = null;
+
+    async function pollStatus() {
+      try {
+        const s = await getAIDecisionStatus(token);
+        liveSteps.value = (s.events || [])
+          .filter((e) => e.label)
+          .map((e) => e.label + (e.isError ? " (error)" : ""));
+      } catch (e) {
+        /* ignore transient poll errors */
+      }
+    }
+    function startPolling() {
+      liveSteps.value = [];
+      stopPolling();
+      pollTimer = setInterval(pollStatus, 1200);
+    }
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
 
     const statusColor = computed(
       () => ({ open: "orange", answered: "blue", closed: "green" }[status.value] || "grey"),
@@ -164,6 +196,7 @@ export default {
       messages.value.push({ role: "user", content: msg });
       draft.value = "";
       sending.value = true;
+      startPolling();
       scrollDown();
       try {
         const r = await replyAIDecision(token, msg, {
@@ -175,6 +208,8 @@ export default {
       } catch (e) {
         notifyError("Pi could not respond. Try again.");
       }
+      stopPolling();
+      liveSteps.value = [];
       sending.value = false;
       scrollDown();
     }
@@ -192,7 +227,7 @@ export default {
     onMounted(load);
     return {
       loading, sending, ticketRef, ctx, messages, status, draft, scrollArea,
-      allowDeviceChanges, allowCustomerReply,
+      allowDeviceChanges, allowCustomerReply, liveSteps,
       statusColor, send, closeDecision,
     };
   },

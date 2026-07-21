@@ -192,6 +192,14 @@ export async function replyAIDecision(
   return data as { reply: string; messages: { role: string; content: string }[]; status: string };
 }
 
+export async function getAIDecisionStatus(token: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/decision/${token}/status/`);
+  return data as {
+    status: string;
+    events: { type: string; label?: string; tool?: string; isError?: boolean }[];
+  };
+}
+
 export async function closeAIDecision(token: string) {
   const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, { action: "close" });
   return data as { status: string };
