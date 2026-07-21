@@ -142,7 +142,7 @@ export default {
     const draft = ref("");
     const scrollArea = ref(null);
     const allowDeviceChanges = ref(false);
-    const allowCustomerReply = ref(false);
+    const allowCustomerReply = ref(true);
     const liveSteps = ref([]);
     let pollTimer = null;
 
