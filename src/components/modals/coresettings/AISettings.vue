@@ -207,21 +207,107 @@
       internal note of what it <em>would</em> do &mdash; it never closes, replies, or touches devices.
     </div>
 
-    <div class="text-caption text-weight-medium">Ticket Scope Limiter (JSON)</div>
-    <q-input
-      :model-value="settings.ai_ticket_scope"
-      type="textarea"
-      outlined
-      autogrow
-      input-style="min-height: 90px; font-family: monospace; font-size: 12px;"
-      label='{"work_regular_ticket_if_requester_domain_in": [...], "always_work_alert_tickets": true, ...}'
-      @update:model-value="update('ai_ticket_scope', $event)"
+    <!-- Granular, no-JSON scope controls (these read/write ai_ticket_scope under the hood) -->
+    <div class="text-caption text-weight-medium text-primary q-mt-xs">1 &middot; What the AI READS (triage scope)</div>
+    <q-toggle
+      :model-value="scopeBool('look_at_all_unassigned', false)"
+      label="Read &amp; triage EVERY open, unassigned / bot-owned ticket"
+      @update:model-value="setScopeBool('look_at_all_unassigned', $event)"
     />
-    <div class="text-caption text-grey q-mb-md">
-      Regular tickets are triaged only when the requester's email domain is allow-listed;
-      alert tickets (matched by subject prefix / sender domain) are always in scope while
-      <code>always_work_alert_tickets</code> is true. Edit anytime &mdash; applies on the next poll.
+    <q-select
+      v-if="!scopeBool('look_at_all_unassigned', false)"
+      :model-value="scopeList('work_regular_ticket_if_requester_domain_in')"
+      multiple
+      use-input
+      use-chips
+      hide-dropdown-icon
+      new-value-mode="add-unique"
+      outlined
+      dense
+      class="q-mb-xs"
+      label="…otherwise only read tickets from these requester email domains (type + Enter)"
+      @update:model-value="setScopeList('work_regular_ticket_if_requester_domain_in', $event)"
+    />
+    <q-toggle
+      :model-value="scopeBool('always_look_at_alerts', true)"
+      label="Always read alert tickets (regardless of the domain list)"
+      @update:model-value="setScopeBool('always_look_at_alerts', $event)"
+    />
+    <div class="text-caption text-grey q-mb-sm">
+      <strong>Reading</strong> = triage only: the AI classifies the ticket and posts an internal note
+      plus a chat link. It never changes a device or emails a customer just from reading.
     </div>
+
+    <div class="text-caption text-weight-medium text-primary">2 &middot; How the AI RECOGNIZES an alert ticket</div>
+    <q-select
+      :model-value="alertList('subject_starts_with')"
+      multiple
+      use-input
+      use-chips
+      hide-dropdown-icon
+      new-value-mode="add-unique"
+      outlined
+      dense
+      class="q-mb-xs"
+      label="Alert subject prefixes (e.g. [Alert]) — type + Enter"
+      @update:model-value="setAlertList('subject_starts_with', $event)"
+    />
+    <q-select
+      :model-value="alertList('from_email_domains')"
+      multiple
+      use-input
+      use-chips
+      hide-dropdown-icon
+      new-value-mode="add-unique"
+      outlined
+      dense
+      class="q-mb-sm"
+      label="Alert sender email domains (monitoring / backup senders)"
+      @update:model-value="setAlertList('from_email_domains', $event)"
+    />
+
+    <div class="text-caption text-weight-medium text-primary">3 &middot; What the AI may ACT on (auto-manage)</div>
+    <q-select
+      :model-value="scopeList('auto_action_domains')"
+      multiple
+      use-input
+      use-chips
+      hide-dropdown-icon
+      new-value-mode="add-unique"
+      outlined
+      dense
+      class="q-mb-xs"
+      label="Auto-action requester email domains (cancel / claim / fix / reply)"
+      @update:model-value="setScopeList('auto_action_domains', $event)"
+    />
+    <q-select
+      :model-value="scopeList('auto_action_clients')"
+      multiple
+      use-input
+      use-chips
+      hide-dropdown-icon
+      new-value-mode="add-unique"
+      outlined
+      dense
+      label="Auto-action client names (covers infra / monitoring alerts with no requester)"
+      @update:model-value="setScopeList('auto_action_clients', $event)"
+    />
+    <div class="text-caption text-grey q-mb-sm">
+      Anything NOT listed here is <strong>look-only</strong>: the AI triages it and leaves a note + a
+      chat link for a human, but never auto-cancels, touches a device, or emails the customer.
+      Start with one or two trusted clients.
+    </div>
+
+    <q-expansion-item dense dense-toggle icon="code" label="Advanced: raw scope JSON" class="q-mb-md">
+      <q-input
+        :model-value="settings.ai_ticket_scope"
+        type="textarea"
+        outlined
+        autogrow
+        input-style="min-height: 90px; font-family: monospace; font-size: 12px;"
+        @update:model-value="update('ai_ticket_scope', $event)"
+      />
+    </q-expansion-item>
 
     <div class="text-caption text-weight-medium">Ticket Triage Policy (prompt)</div>
     <q-input
@@ -626,6 +712,51 @@ export default {
       emit("update", { key, val });
     }
 
+    // ---- Friendly ticket-scope controls (read/write the ai_ticket_scope JSON) ----
+    function parseScope() {
+      try {
+        return JSON.parse(props.settings.ai_ticket_scope || "{}") || {};
+      } catch {
+        return {};
+      }
+    }
+    function writeScope(obj) {
+      update("ai_ticket_scope", JSON.stringify(obj, null, 2));
+    }
+    function cleanList(v) {
+      return (v || []).map((s) => String(s).trim().toLowerCase()).filter(Boolean);
+    }
+    function scopeBool(key, dflt) {
+      const v = parseScope()[key];
+      return v === undefined ? dflt : !!v;
+    }
+    function setScopeBool(key, val) {
+      const o = parseScope();
+      o[key] = !!val;
+      writeScope(o);
+    }
+    function scopeList(key) {
+      const v = parseScope()[key];
+      return Array.isArray(v) ? v : [];
+    }
+    function setScopeList(key, val) {
+      const o = parseScope();
+      o[key] = key === "auto_action_clients" ? (val || []).map((s) => String(s).trim()).filter(Boolean) : cleanList(val);
+      writeScope(o);
+    }
+    function alertList(sub) {
+      const m = parseScope().alert_ticket_match || {};
+      return Array.isArray(m[sub]) ? m[sub] : [];
+    }
+    function setAlertList(sub, val) {
+      const o = parseScope();
+      o.alert_ticket_match = o.alert_ticket_match || {};
+      o.alert_ticket_match[sub] = sub === "subject_starts_with"
+        ? (val || []).map((s) => String(s).trim()).filter(Boolean)
+        : cleanList(val);
+      writeScope(o);
+    }
+
     // provider dialog
     const providerDialog = ref(false);
     const providerForm = ref({});
@@ -721,6 +852,12 @@ export default {
       onProviderChange,
       onModelPick,
       update,
+      scopeBool,
+      setScopeBool,
+      scopeList,
+      setScopeList,
+      alertList,
+      setAlertList,
       providerDialog,
       providerForm,
       addProvider,
