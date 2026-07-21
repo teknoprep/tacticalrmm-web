@@ -238,6 +238,23 @@
       above, this is a prompt &mdash; adjust it on the fly for any ticketing system.
     </div>
 
+    <div class="text-caption text-weight-medium">Decision-Chat Policy (prompt)</div>
+    <q-input
+      :model-value="settings.ai_ticket_decision_prompt"
+      type="textarea"
+      outlined
+      autogrow
+      input-style="min-height: 160px"
+      label="How the AI behaves in the 'Johnny 5 Need Input!' decision chat (routing, completion, device-fix/email rules)"
+      @update:model-value="update('ai_ticket_decision_prompt', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Governs the ticket <strong>chat</strong> where a tech works a ticket with the AI: closing/
+      routing rules, the completion policy (review + customer reply), device‑fix and email guidance.
+      The dynamic bits (ticket, resolved context, per‑turn approvals) are added automatically.
+      Edit freely &mdash; leave blank to use the built‑in default.
+    </div>
+
     <!-- AI helpdesk-setup assistant -->
     <q-dialog v-model="assistDialog">
       <q-card style="min-width: 760px; max-width: 92vw">
