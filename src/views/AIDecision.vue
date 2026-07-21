@@ -64,6 +64,20 @@
             placeholder="Answer Pi's question (e.g. 'It's RKarrer-LT1' or 'Cancel it, that's a duplicate')…"
             @keydown.enter.exact.prevent="send"
           />
+          <div class="row items-center q-gutter-md q-mt-xs">
+            <q-toggle
+              v-model="allowDeviceChanges"
+              dense
+              color="deep-orange"
+              label="Allow disruptive changes (reboots/service stops/deletes)"
+            />
+            <q-toggle
+              v-model="allowCustomerReply"
+              dense
+              color="blue"
+              label="Allow sending customer email"
+            />
+          </div>
           <div class="row items-center q-mt-sm">
             <q-btn
               flat
@@ -116,6 +130,8 @@ export default {
     const status = ref("open");
     const draft = ref("");
     const scrollArea = ref(null);
+    const allowDeviceChanges = ref(false);
+    const allowCustomerReply = ref(false);
 
     const statusColor = computed(
       () => ({ open: "orange", answered: "blue", closed: "green" }[status.value] || "grey"),
@@ -150,7 +166,10 @@ export default {
       sending.value = true;
       scrollDown();
       try {
-        const r = await replyAIDecision(token, msg);
+        const r = await replyAIDecision(token, msg, {
+          allow_device_changes: allowDeviceChanges.value,
+          allow_customer_reply: allowCustomerReply.value,
+        });
         messages.value = r.messages;
         status.value = r.status;
       } catch (e) {
@@ -173,6 +192,7 @@ export default {
     onMounted(load);
     return {
       loading, sending, ticketRef, ctx, messages, status, draft, scrollArea,
+      allowDeviceChanges, allowCustomerReply,
       statusColor, send, closeDecision,
     };
   },

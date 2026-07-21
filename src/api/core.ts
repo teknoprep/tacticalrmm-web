@@ -154,6 +154,20 @@ export async function helpdeskAssist(messages: { role: string; content: string }
   return data as { reply: string };
 }
 
+export async function getScheduledActions() {
+  const { data } = await axios.get(`${baseUrl}/ai/schedule-action/`);
+  return data as {
+    id: number; ticket_ref: string; agent: string | null; agent_id: string | null;
+    action: string; run_at: string; status: string; allow_mutating: boolean;
+    created_by: string; result: string;
+  }[];
+}
+
+export async function deleteScheduledAction(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/schedule-action/${id}/`);
+  return data;
+}
+
 export async function getAIDecision(token: string) {
   const { data } = await axios.get(`${baseUrl}/ai/decision/${token}/`);
   return data as {
@@ -165,8 +179,16 @@ export async function getAIDecision(token: string) {
   };
 }
 
-export async function replyAIDecision(token: string, message: string) {
-  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, { message });
+export async function replyAIDecision(
+  token: string,
+  message: string,
+  opts?: { allow_device_changes?: boolean; allow_customer_reply?: boolean },
+) {
+  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, {
+    message,
+    allow_device_changes: opts?.allow_device_changes ?? false,
+    allow_customer_reply: opts?.allow_customer_reply ?? false,
+  });
   return data as { reply: string; messages: { role: string; content: string }[]; status: string };
 }
 

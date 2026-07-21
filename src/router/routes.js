@@ -88,6 +88,15 @@ const routes = [
   },
 
   {
+    path: "/ai-scheduled-actions",
+    name: "AIScheduledActions",
+    component: () => import("@/views/AIScheduledActions.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+
+  {
     path: "/webterm",
     name: "WebTerm",
     component: () => import("@/views/WebTerminal.vue"),
