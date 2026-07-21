@@ -179,6 +179,56 @@
       for Zendesk / Freshdesk / etc. Saved with the main <strong>Save</strong> button.
     </div>
 
+    <div class="row items-center q-mt-md">
+      <div class="text-subtitle2">Ticket Automation (pilot)</div>
+      <q-space />
+      <q-toggle
+        :model-value="settings.ai_ticket_automation_enabled"
+        label="Enabled (master switch)"
+        left-label
+        @update:model-value="update('ai_ticket_automation_enabled', $event)"
+      />
+    </div>
+    <q-separator class="q-mb-sm" />
+    <div class="text-caption text-grey q-mb-sm">
+      Autonomous ticket triage. The poller lists open tickets via the
+      <code>list_open_tickets</code> operation in the integration code above (works with any
+      helpdesk), applies the scope limiter, and triages each new in-scope ticket.
+      <strong>Phase 1 = shadow mode:</strong> the AI only classifies and posts a staff-only
+      internal note of what it <em>would</em> do &mdash; it never closes, replies, or touches devices.
+    </div>
+
+    <div class="text-caption text-weight-medium">Ticket Scope Limiter (JSON)</div>
+    <q-input
+      :model-value="settings.ai_ticket_scope"
+      type="textarea"
+      outlined
+      autogrow
+      input-style="min-height: 90px; font-family: monospace; font-size: 12px;"
+      label='{"work_regular_ticket_if_requester_domain_in": [...], "always_work_alert_tickets": true, ...}'
+      @update:model-value="update('ai_ticket_scope', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Regular tickets are triaged only when the requester's email domain is allow-listed;
+      alert tickets (matched by subject prefix / sender domain) are always in scope while
+      <code>always_work_alert_tickets</code> is true. Edit anytime &mdash; applies on the next poll.
+    </div>
+
+    <div class="text-caption text-weight-medium">Ticket Triage Policy (prompt)</div>
+    <q-input
+      :model-value="settings.ai_ticket_triage_prompt"
+      type="textarea"
+      outlined
+      autogrow
+      input-style="min-height: 120px"
+      label="How to classify YOUR tickets: what's a clean alert vs actionable, what to draft"
+      @update:model-value="update('ai_ticket_triage_prompt', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Deployment-specific triage rules (stages, alert patterns, examples). Like the policy
+      above, this is a prompt &mdash; adjust it on the fly for any ticketing system.
+    </div>
+
     <!-- AI helpdesk-setup assistant -->
     <q-dialog v-model="assistDialog">
       <q-card style="min-width: 760px; max-width: 92vw">
