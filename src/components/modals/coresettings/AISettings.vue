@@ -189,6 +189,15 @@
         @update:model-value="update('ai_ticket_automation_enabled', $event)"
       />
     </div>
+    <div class="row justify-end q-mb-xs">
+      <q-toggle
+        :model-value="settings.ai_ticket_act_on_alerts"
+        label="Act on alerts (cancel non-actionable, claim actionable)"
+        left-label
+        color="deep-orange"
+        @update:model-value="update('ai_ticket_act_on_alerts', $event)"
+      />
+    </div>
     <q-separator class="q-mb-sm" />
     <div class="text-caption text-grey q-mb-sm">
       Autonomous ticket triage. The poller lists open tickets via the
