@@ -1,5 +1,5 @@
 <template>
-  <q-page class="q-pa-md flex flex-center">
+  <div class="q-pa-md flex flex-center" style="min-height: 100vh; background: #f5f5f5">
     <q-card style="width: 800px; max-width: 95vw" flat bordered>
       <q-card-section class="bg-primary text-white row items-center q-py-sm">
         <q-icon name="smart_toy" size="sm" class="q-mr-sm" />
@@ -94,7 +94,7 @@
         </q-card-section>
       </template>
     </q-card>
-  </q-page>
+  </div>
 </template>
 
 <script>
