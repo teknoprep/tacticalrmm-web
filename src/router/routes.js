@@ -62,6 +62,14 @@ const routes = [
     },
   },
   {
+    path: "/remoteproxy/:agent_id",
+    name: "RemoteProxy",
+    component: () => import("@/views/RemoteProxy.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+  {
     path: "/pichat/:agent_id",
     name: "PiChat",
     component: () => import("@/views/PiChat.vue"),
@@ -69,6 +77,16 @@ const routes = [
       requireAuth: true,
     },
   },
+
+  {
+    path: "/ai-decision/:token",
+    name: "AIDecision",
+    component: () => import("@/views/AIDecision.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+
   {
     path: "/webterm",
     name: "WebTerm",

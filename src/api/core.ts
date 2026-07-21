@@ -154,6 +154,27 @@ export async function helpdeskAssist(messages: { role: string; content: string }
   return data as { reply: string };
 }
 
+export async function getAIDecision(token: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/decision/${token}/`);
+  return data as {
+    ticket_ref: string;
+    question: string;
+    context: Record<string, string>;
+    messages: { role: string; content: string; ts?: string }[];
+    status: string;
+  };
+}
+
+export async function replyAIDecision(token: string, message: string) {
+  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, { message });
+  return data as { reply: string; messages: { role: string; content: string }[]; status: string };
+}
+
+export async function closeAIDecision(token: string) {
+  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, { action: "close" });
+  return data as { status: string };
+}
+
 export async function getDeviceNotes(agentId: string) {
   const { data } = await axios.get(`${baseUrl}/ai/device-note/`, {
     params: { agent_id: agentId },
