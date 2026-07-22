@@ -168,47 +168,10 @@ export async function deleteScheduledAction(id: number) {
   return data;
 }
 
-export async function getAIDecision(token: string) {
-  const { data } = await axios.get(`${baseUrl}/ai/decision/${token}/`);
-  return data as {
-    ticket_ref: string;
-    question: string;
-    context: Record<string, string>;
-    messages: { role: string; content: string; ts?: string }[];
-    status: string;
-  };
-}
-
-export async function replyAIDecision(
-  token: string,
-  message: string,
-  opts?: { allow_device_changes?: boolean; allow_customer_reply?: boolean },
-) {
-  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, {
-    message,
-    allow_device_changes: opts?.allow_device_changes ?? false,
-    allow_customer_reply: opts?.allow_customer_reply ?? false,
-  });
-  return data as { reply: string; messages: { role: string; content: string }[]; status: string };
-}
-
 export async function createDecisionSession(token: string, payload: object = {}) {
   // Mint a stateful, streaming decision-chat session (same machinery as the device chat).
   const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/session/`, payload);
   return data;
-}
-
-export async function getAIDecisionStatus(token: string) {
-  const { data } = await axios.get(`${baseUrl}/ai/decision/${token}/status/`);
-  return data as {
-    status: string;
-    events: { type: string; label?: string; tool?: string; isError?: boolean }[];
-  };
-}
-
-export async function closeAIDecision(token: string) {
-  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/`, { action: "close" });
-  return data as { status: string };
 }
 
 export async function getDeviceNotes(agentId: string) {

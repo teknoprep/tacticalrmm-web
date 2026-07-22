@@ -50,6 +50,17 @@
         class="q-mr-sm"
         @update:model-value="sendAutoApprove"
       />
+      <q-toggle
+        v-if="isDecision"
+        v-model="allowEmail"
+        dense
+        color="teal"
+        label="Allow customer email"
+        class="q-mr-sm"
+        @update:model-value="sendAllowEmail"
+      >
+        <q-tooltip>Let Pi send replies to the customer on this ticket. Off = drafts only.</q-tooltip>
+      </q-toggle>
       <q-btn
         v-if="!isDecision"
         flat
@@ -62,7 +73,7 @@
       />
       <!-- toggle when the role can write; static badge when it can't -->
       <q-toggle
-        v-if="mutateAllowed && !isDecision"
+        v-if="mutateAllowed"
         :model-value="!readOnly"
         dense
         color="deep-orange"
@@ -349,6 +360,10 @@ export default {
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
     const readOnly = ref(false);
+    const allowEmail = ref(true);
+    function sendAllowEmail(val) {
+      if (ws && connected.value) ws.send(JSON.stringify({ type: "set_allow_email", value: !!val }));
+    }
     const mutateAllowed = ref(false);
     const resolveRun = route.query.resolve_run || null;
     let resolveSeeded = false;
@@ -580,6 +595,7 @@ export default {
             if (m.type === "ready") {
               curSessionId = m.session_id || curSessionId;
               readOnly.value = !!m.read_only;
+              if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
               mutateAllowed.value = !!m.mutate_allowed;
               maybeSeedResolve();
               // hydrate history — reconstruct the full transcript INCLUDING the
@@ -637,6 +653,8 @@ export default {
               autoApprove.value = m.value;
             } else if (m.type === "readonly_state") {
               readOnly.value = m.value;
+            } else if (m.type === "allow_email_state") {
+              allowEmail.value = m.value;
               messages.value.push({
                 role: "system",
                 text: m.value
@@ -813,6 +831,8 @@ export default {
       autoApprove,
       autoapproveAllowed,
       readOnly,
+      allowEmail,
+      sendAllowEmail,
       mutateAllowed,
       setReadonly,
       pendingApproval,
