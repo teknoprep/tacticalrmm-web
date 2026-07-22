@@ -42,7 +42,7 @@
         <template #prepend><q-icon name="search" /></template>
       </q-input>
       <q-table
-        :rows="tasks"
+        :rows="mergedRows"
         :columns="columns"
         row-key="id"
         dense
@@ -58,28 +58,44 @@
             <q-icon name="dns" size="xs" class="q-mr-xs" />{{ props.row.hostname }}
           </q-td>
         </template>
+        <template #body-cell-name="props">
+          <q-td :props="props">
+            <template v-if="props.row._kind === 'created'">
+              <q-icon name="smart_toy" size="xs" color="deep-purple" class="q-mr-xs" />
+              <a class="pi-created-link" @click="viewCreated(props.row)">{{ truncate(props.row.name, 60) }}</a>
+              <q-badge color="deep-purple" outline class="q-ml-xs" label="AI" />
+              <q-tooltip>{{ props.row.name }}</q-tooltip>
+            </template>
+            <template v-else>{{ props.row.name }}</template>
+          </q-td>
+        </template>
         <template #body-cell-by="props">
           <q-td :props="props">
-            {{ props.row.modified_by || props.row.created_by || "—" }}
-            <q-tooltip v-if="props.row.created_by || props.row.modified_by">
-              Created by {{ props.row.created_by || "unknown" }}<span
-                v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
-              >
-                &middot; Last edited by {{ props.row.modified_by }}</span
-              >
-            </q-tooltip>
+            <template v-if="props.row._kind === 'created'">Pi (AI)</template>
+            <template v-else>
+              {{ props.row.modified_by || props.row.created_by || "—" }}
+              <q-tooltip v-if="props.row.created_by || props.row.modified_by">
+                Created by {{ props.row.created_by || "unknown" }}<span
+                  v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
+                >
+                  &middot; Last edited by {{ props.row.modified_by }}</span
+                >
+              </q-tooltip>
+            </template>
           </q-td>
         </template>
         <template #body-cell-enabled="props">
           <q-td :props="props">
             <q-icon
+              v-if="props.row._kind !== 'created'"
               :name="props.row.enabled ? 'check_circle' : 'pause_circle'"
               :color="props.row.enabled ? 'green' : 'grey'"
             />
+            <span v-else class="text-grey">—</span>
           </q-td>
         </template>
         <template #body-cell-schedule="props">
-          <q-td :props="props">{{ scheduleText(props.row) }}</q-td>
+          <q-td :props="props">{{ props.row._kind === 'created' ? ('Once · ' + formatTime(props.row.run_at)) : scheduleText(props.row) }}</q-td>
         </template>
         <template #body-cell-last_status="props">
           <q-td :props="props">
@@ -102,111 +118,84 @@
         </template>
         <template #body-cell-actions="props">
           <q-td :props="props">
-            <q-btn
-              dense
-              flat
-              size="sm"
-              icon="play_arrow"
-              color="primary"
-              @click="runNow(props.row)"
-            >
-              <q-tooltip>Run now</q-tooltip>
-            </q-btn>
-            <q-btn
-              v-if="runningTasks[props.row.id]"
-              dense
-              flat
-              size="sm"
-              icon="sensors"
-              color="red"
-              class="pi-live-pulse"
-              @click="openLive(runningTasks[props.row.id])"
-            >
-              <q-tooltip>Live — trace what it's doing now</q-tooltip>
-            </q-btn>
-            <q-btn dense flat size="sm" icon="history" @click="openHistory(props.row)">
-              <q-tooltip>View run history</q-tooltip>
-            </q-btn>
-            <q-btn
-              v-if="mode === 'agent'"
-              dense
-              flat
-              size="sm"
-              icon="edit"
-              @click="editTask(props.row)"
-            />
-            <q-btn
-              v-if="mode === 'agent'"
-              dense
-              flat
-              size="sm"
-              icon="delete"
-              color="red"
-              @click="remove(props.row)"
-            />
+            <template v-if="props.row._kind === 'created'">
+              <q-btn dense flat size="sm" icon="open_in_full" @click="viewCreated(props.row)">
+                <q-tooltip>View details</q-tooltip>
+              </q-btn>
+              <q-btn
+                v-if="props.row.status === 'scheduled'"
+                dense flat size="sm" icon="delete" color="red"
+                @click="cancelAiCreated(props.row)"
+              >
+                <q-tooltip>Cancel this AI-scheduled action</q-tooltip>
+              </q-btn>
+            </template>
+            <template v-else>
+              <q-btn dense flat size="sm" icon="play_arrow" color="primary" @click="runNow(props.row)">
+                <q-tooltip>Run now</q-tooltip>
+              </q-btn>
+              <q-btn
+                v-if="runningTasks[props.row.id]"
+                dense flat size="sm" icon="sensors" color="red" class="pi-live-pulse"
+                @click="openLive(runningTasks[props.row.id])"
+              >
+                <q-tooltip>Live — trace what it's doing now</q-tooltip>
+              </q-btn>
+              <q-btn dense flat size="sm" icon="history" @click="openHistory(props.row)">
+                <q-tooltip>View run history</q-tooltip>
+              </q-btn>
+              <q-btn v-if="mode === 'agent'" dense flat size="sm" icon="edit" @click="editTask(props.row)" />
+              <q-btn v-if="mode === 'agent'" dense flat size="sm" icon="delete" color="red" @click="remove(props.row)" />
+            </template>
           </q-td>
         </template>
       </q-table>
-      <div v-if="tasks.length === 0" class="q-pa-md text-grey">
+      <div v-if="mergedRows.length === 0" class="q-pa-md text-grey">
         <template v-if="mode === 'agent'">
-          No scheduled AI tasks yet. Create one to have Pi periodically check this
-          device and raise an alert if it finds a problem.
+          No AI tasks yet. Create one to have Pi periodically check this device — or Pi
+          will add its own scheduled actions here while working this device's tickets.
         </template>
         <template v-else>
           No AI tasks configured for any device in this {{ scope.kind }}.
         </template>
       </div>
-
-      <!-- AI Created: scheduled actions Pi queued while working tickets -->
-      <template v-if="mode === 'agent' && aiCreated.length">
-        <div class="row items-center q-pa-sm q-mt-md">
-          <q-icon name="smart_toy" size="xs" class="q-mr-xs" color="deep-purple" />
-          <div class="text-subtitle2">AI Created</div>
-          <q-badge color="deep-purple" class="q-ml-sm" :label="aiCreated.length" />
-          <q-space />
-          <div class="text-caption text-grey">Scheduled by Pi while working tickets (runs once, then clears)</div>
-        </div>
-        <q-separator />
-        <q-table
-          :rows="aiCreated"
-          :columns="aiCreatedColumns"
-          row-key="id"
-          dense
-          flat
-          hide-bottom
-          virtual-scroll
-          :style="{ height: aiCreatedHeight }"
-          :pagination="{ rowsPerPage: 0, sortBy: 'run_at' }"
-        >
-          <template #body-cell-status="props">
-            <q-td :props="props">
-              <q-badge :color="statusColor(props.row.status)" :label="props.row.status" />
-            </q-td>
-          </template>
-          <template #body-cell-action="props">
-            <q-td :props="props" style="max-width: 340px; white-space: normal">
-              {{ props.row.action }}
-              <div v-if="props.row.result" class="text-caption text-grey">↳ {{ props.row.result }}</div>
-            </q-td>
-          </template>
-          <template #body-cell-cancel="props">
-            <q-td :props="props" class="text-right">
-              <q-btn
-                v-if="props.row.status === 'scheduled'"
-                dense
-                flat
-                size="sm"
-                icon="delete"
-                color="red"
-                @click="cancelAiCreated(props.row)"
-              >
-                <q-tooltip>Cancel this AI-scheduled action</q-tooltip>
-              </q-btn>
-            </q-td>
-          </template>
-        </q-table>
-      </template>
     </div>
+
+    <!-- AI-created scheduled action: details -->
+    <q-dialog v-model="createdDialog">
+      <q-card style="min-width: 520px; max-width: 92vw">
+        <q-card-section class="row items-center">
+          <q-icon name="smart_toy" color="deep-purple" class="q-mr-sm" />
+          <div class="text-subtitle1">AI-created scheduled action</div>
+          <q-space />
+          <q-btn dense flat icon="close" v-close-popup />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="q-gutter-sm">
+          <div><span class="text-grey">Ticket:</span> {{ createdDetail.ticket_ref || "—" }}</div>
+          <div><span class="text-grey">Runs:</span> once · {{ formatTime(createdDetail.run_at) }}</div>
+          <div class="row items-center">
+            <span class="text-grey q-mr-sm">Status:</span>
+            <q-badge :color="statusColor(createdDetail.status)" :label="createdDetail.status" />
+          </div>
+          <div><span class="text-grey">Makes changes:</span> {{ createdDetail.allow_mutating ? "Yes" : "No (read-only)" }}</div>
+          <div class="text-grey q-mt-sm">Action</div>
+          <div class="pi-created-action">{{ createdDetail.action }}</div>
+          <template v-if="createdDetail.result">
+            <div class="text-grey q-mt-sm">Result</div>
+            <div class="pi-created-action">{{ createdDetail.result }}</div>
+          </template>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            v-if="createdDetail.status === 'scheduled'"
+            flat color="red" icon="delete" label="Cancel action"
+            @click="cancelAiCreated(createdDetail)"
+          />
+          <q-btn flat label="Close" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <!-- edit dialog -->
     <q-dialog v-model="dialog">
@@ -586,20 +575,11 @@ export default {
     const tasks = ref([]);
     // AI-created scheduled actions (queued by Pi in ticket chats) for this device.
     const aiCreated = ref([]);
-    const aiCreatedColumns = [
-      { name: "ticket_ref", label: "Ticket", field: "ticket_ref", align: "left" },
-      { name: "action", label: "Action", field: "action", align: "left" },
-      {
-        name: "run_at", label: "Runs at", field: "run_at", align: "left",
-        format: (v) => (v ? new Date(v).toLocaleString() : ""),
-      },
-      { name: "status", label: "Status", field: "status", align: "left" },
-      { name: "cancel", label: "", field: "cancel", align: "right" },
-    ];
     async function cancelAiCreated(row) {
       try {
-        await deleteScheduledAction(row.id);
+        await deleteScheduledAction(row._actionId || row.id);
         notifySuccess("Scheduled action cancelled");
+        createdDialog.value = false;
         await load();
       } catch (e) {
         notifyError("Failed to cancel");
@@ -633,15 +613,32 @@ export default {
 
     const tableHeight = computed(() => {
       const base = parseInt(tabHeight.value) || 300;
-      if (mode.value === "scope") return `${base - 60}px`;
-      // agent mode: shrink the tasks table when there's an AI-Created section below it
-      if (aiCreated.value.length) return `${Math.max(150, Math.floor(base * 0.5))}px`;
-      return `${base}px`;
+      return `${mode.value === "scope" ? base - 60 : base}px`;
     });
-    const aiCreatedHeight = computed(() => {
-      const base = parseInt(tabHeight.value) || 300;
-      return `${Math.max(150, Math.floor(base * 0.42))}px`;
+    // AI-created scheduled actions are merged INTO the tasks table as rows (tagged _kind).
+    const mergedRows = computed(() => {
+      const created = aiCreated.value.map((r) => ({
+        ...r,
+        _kind: "created",
+        id: "ai-" + r.id,
+        _actionId: r.id,
+        name: r.action,
+        last_status: r.status,
+        last_status_rank: 5,
+        last_run: formatTime(r.run_at),
+      }));
+      return [...tasks.value, ...created];
     });
+    const createdDialog = ref(false);
+    const createdDetail = ref({});
+    function viewCreated(row) {
+      createdDetail.value = row;
+      createdDialog.value = true;
+    }
+    function truncate(s, n) {
+      s = s || "";
+      return s.length > n ? s.slice(0, n) + "\u2026" : s;
+    }
 
     const columns = computed(() => {
       const cols = [];
@@ -691,7 +688,10 @@ export default {
       return `Every ${row.interval_minutes} min`;
     }
     function statusColor(s) {
-      return { ok: "green", warning: "orange", alert: "red", error: "grey", running: "blue" }[s] || "grey";
+      return {
+        ok: "green", warning: "orange", alert: "red", error: "grey", running: "blue",
+        scheduled: "blue-grey", done: "green", cancelled: "grey",
+      }[s] || "grey";
     }
     function formatTime(ts) {
       if (!ts) return "";
@@ -969,12 +969,14 @@ export default {
       scope,
       headerText,
       tableHeight,
-      aiCreatedHeight,
       tabHeight,
       tasks,
-      aiCreated,
-      aiCreatedColumns,
+      mergedRows,
       cancelAiCreated,
+      createdDialog,
+      createdDetail,
+      viewCreated,
+      truncate,
       modelOptions,
       runningTasks,
       filter,
@@ -1066,6 +1068,20 @@ export default {
 }
 .pi-say {
   white-space: pre-wrap;
+}
+.pi-created-link {
+  color: #7e57c2;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.pi-created-action {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 8px;
+  border-radius: 4px;
 }
 .pi-live-ev {
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
