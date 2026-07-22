@@ -1,6 +1,6 @@
 <template>
-  <div class="q-pa-md" style="min-height: 100vh; background: #f5f5f5">
-    <q-card flat bordered style="max-width: 1300px; margin: 0 auto">
+  <div class="q-pa-sm" style="min-height: 100vh; background: #f5f5f5">
+    <q-card flat bordered style="width: 100%">
       <q-card-section class="bg-primary text-white row items-center q-py-sm">
         <q-icon name="smart_toy" size="sm" class="q-mr-sm" />
         <div class="text-subtitle1">Pi.dev AI — Ticket Console</div>
@@ -64,6 +64,11 @@
         <template #body-cell-status="props">
           <q-td :props="props">
             <q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" />
+          </q-td>
+        </template>
+        <template #body-cell-subject="props">
+          <q-td :props="props" style="white-space: normal; word-break: break-word; min-width: 320px">
+            {{ props.row.subject }}
           </q-td>
         </template>
         <template #body-cell-classification="props">

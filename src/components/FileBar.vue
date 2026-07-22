@@ -420,7 +420,11 @@ export default {
       this.$q.dialog({ component: BulkAICommands });
     },
     openTicketConsole() {
-      window.open("/ai-ticket-console", "_blank");
+      window.open(
+        "/ai-ticket-console",
+        "PiTicketConsole",
+        "width=1500,height=950,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes",
+      );
     },
     showBulkAction(mode) {
       this.$q.dialog({
