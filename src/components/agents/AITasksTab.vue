@@ -156,6 +156,54 @@
           No AI tasks configured for any device in this {{ scope.kind }}.
         </template>
       </div>
+
+      <!-- AI Created: scheduled actions Pi queued while working tickets -->
+      <template v-if="mode === 'agent' && aiCreated.length">
+        <div class="row items-center q-pa-sm q-mt-md">
+          <q-icon name="smart_toy" size="xs" class="q-mr-xs" color="deep-purple" />
+          <div class="text-subtitle2">AI Created</div>
+          <q-badge color="deep-purple" class="q-ml-sm" :label="aiCreated.length" />
+          <q-space />
+          <div class="text-caption text-grey">Scheduled by Pi while working tickets (runs once, then clears)</div>
+        </div>
+        <q-separator />
+        <q-table
+          :rows="aiCreated"
+          :columns="aiCreatedColumns"
+          row-key="id"
+          dense
+          flat
+          hide-bottom
+          :pagination="{ rowsPerPage: 0, sortBy: 'run_at' }"
+        >
+          <template #body-cell-status="props">
+            <q-td :props="props">
+              <q-badge :color="statusColor(props.row.status)" :label="props.row.status" />
+            </q-td>
+          </template>
+          <template #body-cell-action="props">
+            <q-td :props="props" style="max-width: 340px; white-space: normal">
+              {{ props.row.action }}
+              <div v-if="props.row.result" class="text-caption text-grey">↳ {{ props.row.result }}</div>
+            </q-td>
+          </template>
+          <template #body-cell-cancel="props">
+            <q-td :props="props" class="text-right">
+              <q-btn
+                v-if="props.row.status === 'scheduled'"
+                dense
+                flat
+                size="sm"
+                icon="delete"
+                color="red"
+                @click="cancelAiCreated(props.row)"
+              >
+                <q-tooltip>Cancel this AI-scheduled action</q-tooltip>
+              </q-btn>
+            </q-td>
+          </template>
+        </q-table>
+      </template>
     </div>
 
     <!-- edit dialog -->
@@ -520,6 +568,8 @@ import {
   fetchAITaskRuns,
   fetchAITaskRunLive,
   aiPromptAssist,
+  getScheduledActions,
+  deleteScheduledAction,
 } from "@/api/core";
 import { runPiChat } from "@/api/agents";
 import { notifySuccess, notifyError } from "@/utils/notify";
@@ -532,6 +582,27 @@ export default {
     const selectedTree = computed(() => store.state.selectedTree);
     const tabHeight = computed(() => store.state.tabHeight);
     const tasks = ref([]);
+    // AI-created scheduled actions (queued by Pi in ticket chats) for this device.
+    const aiCreated = ref([]);
+    const aiCreatedColumns = [
+      { name: "ticket_ref", label: "Ticket", field: "ticket_ref", align: "left" },
+      { name: "action", label: "Action", field: "action", align: "left" },
+      {
+        name: "run_at", label: "Runs at", field: "run_at", align: "left",
+        format: (v) => (v ? new Date(v).toLocaleString() : ""),
+      },
+      { name: "status", label: "Status", field: "status", align: "left" },
+      { name: "cancel", label: "", field: "cancel", align: "right" },
+    ];
+    async function cancelAiCreated(row) {
+      try {
+        await deleteScheduledAction(row.id);
+        notifySuccess("Scheduled action cancelled");
+        await load();
+      } catch (e) {
+        notifyError("Failed to cancel");
+      }
+    }
     const modelOptions = ref([]);
     const runningTasks = ref({});
     const filter = ref("");
@@ -622,6 +693,7 @@ export default {
       }
     }
 
+    // eslint-disable-next-line no-use-before-define
     async function load() {
       try {
         let data = [];
@@ -633,6 +705,17 @@ export default {
         }));
       } catch (e) {
         tasks.value = [];
+      }
+      // AI-created scheduled actions for THIS device (agent mode only).
+      if (mode.value === "agent") {
+        try {
+          const acts = await getScheduledActions();
+          aiCreated.value = (acts || []).filter((a) => a.agent_id === selectedAgent.value);
+        } catch (e) {
+          aiCreated.value = [];
+        }
+      } else {
+        aiCreated.value = [];
       }
     }
     async function loadModels() {
@@ -879,6 +962,9 @@ export default {
       tableHeight,
       tabHeight,
       tasks,
+      aiCreated,
+      aiCreatedColumns,
+      cancelAiCreated,
       modelOptions,
       runningTasks,
       filter,
