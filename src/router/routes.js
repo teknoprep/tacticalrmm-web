@@ -89,6 +89,14 @@ const routes = [
   },
 
   {
+    path: "/ai-ticket-console",
+    name: "AITicketConsole",
+    component: () => import("@/views/AITicketConsole.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+  {
     path: "/ai-scheduled-actions",
     name: "AIScheduledActions",
     component: () => import("@/views/AIScheduledActions.vue"),

@@ -168,6 +168,31 @@ export async function deleteScheduledAction(id: number) {
   return data;
 }
 
+export async function getTicketConsole() {
+  const { data } = await axios.get(`${baseUrl}/ai/ticket-console/`);
+  return data as {
+    ticket_ref: string; subject: string; client: string; device: string;
+    requester: string; status: string; classification: string; is_alert: boolean;
+    summary: string; proposed_action: string; updated: string;
+    token: string | null; decision_url: string;
+  }[];
+}
+
+export async function getTicketConsoleItem(ticketRef: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/ticket-console/${ticketRef}/`);
+  return data as {
+    ticket_ref: string; subject: string; status: string; classification: string;
+    summary: string; proposed_action: string; is_alert: boolean;
+    messages: { role: string; content: string; ts?: string }[];
+    context: Record<string, string>;
+  };
+}
+
+export async function autoResolveTicket(ticketRef: string) {
+  const { data } = await axios.post(`${baseUrl}/ai/ticket-console/${ticketRef}/`, {});
+  return data as { queued: boolean };
+}
+
 export async function createDecisionSession(token: string, payload: object = {}) {
   // Mint a stateful, streaming decision-chat session (same machinery as the device chat).
   const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/session/`, payload);

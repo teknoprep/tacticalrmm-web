@@ -130,6 +130,10 @@
               <q-item clickable v-close-popup @click="showBulkAICommands">
                 <q-item-section>Bulk AI Command</q-item-section>
               </q-item>
+              <!-- AI ticket console -->
+              <q-item clickable v-close-popup @click="openTicketConsole">
+                <q-item-section>AI Ticket Console</q-item-section>
+              </q-item>
               <!-- bulk patch management -->
               <q-item clickable v-close-popup @click="showBulkAction('patch')">
                 <q-item-section>Bulk Patch Management</q-item-section>
@@ -414,6 +418,9 @@ export default {
     },
     showBulkAICommands() {
       this.$q.dialog({ component: BulkAICommands });
+    },
+    openTicketConsole() {
+      window.open("/ai-ticket-console", "_blank");
     },
     showBulkAction(mode) {
       this.$q.dialog({
