@@ -192,6 +192,12 @@ export async function replyAIDecision(
   return data as { reply: string; messages: { role: string; content: string }[]; status: string };
 }
 
+export async function createDecisionSession(token: string, payload: object = {}) {
+  // Mint a stateful, streaming decision-chat session (same machinery as the device chat).
+  const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/session/`, payload);
+  return data;
+}
+
 export async function getAIDecisionStatus(token: string) {
   const { data } = await axios.get(`${baseUrl}/ai/decision/${token}/status/`);
   return data as {

@@ -13,6 +13,7 @@
       </div>
       <q-space />
       <q-btn
+        v-if="!isDecision"
         flat
         dense
         no-caps
@@ -50,6 +51,7 @@
         @update:model-value="sendAutoApprove"
       />
       <q-btn
+        v-if="!isDecision"
         flat
         dense
         no-caps
@@ -60,7 +62,7 @@
       />
       <!-- toggle when the role can write; static badge when it can't -->
       <q-toggle
-        v-if="mutateAllowed"
+        v-if="mutateAllowed && !isDecision"
         :model-value="!readOnly"
         dense
         color="deep-orange"
@@ -308,7 +310,7 @@ import {
   decodePiMachines,
   encodePiMachines,
 } from "@/api/agents";
-import { fetchAITaskRunLive } from "@/api/core";
+import { fetchAITaskRunLive, createDecisionSession } from "@/api/core";
 import { useAgentDropdown } from "@/composables/agents";
 import { notifyError } from "@/utils/notify";
 import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
@@ -319,6 +321,10 @@ export default {
   setup() {
     const route = useRoute();
     const router = useRouter();
+    // Decision (ticket) chat reuses this exact component; it just mints its session
+    // from the decision endpoint instead of an agent.
+    const decisionToken = route.params.token || null;
+    const isDecision = !!decisionToken;
     const agentId = route.params.agent_id;
     const isMulti = agentId === "multi";
 
@@ -522,7 +528,9 @@ export default {
         try { ws.close(); } catch (e) { /* noop */ }
         ws = null;
       }
-      const create = isMulti
+      const create = isDecision
+        ? createDecisionSession(decisionToken, { ...(model_id ? { model_id } : {}) })
+        : isMulti
         ? createPiMultiSession({
             machines: multiMachines,
             ...(model_id ? { model_id } : {}),
@@ -789,6 +797,7 @@ export default {
 
     return {
       agentId,
+      isDecision,
       hostname,
       clientSite,
       connectionLost,
