@@ -20,8 +20,38 @@
         <q-btn dense flat round icon="refresh" :loading="loading" @click="load" />
       </q-card-section>
       <q-separator />
+
+      <!-- metrics -->
+      <q-card-section class="row q-col-gutter-sm q-py-sm">
+        <div v-for="s in stats" :key="s.label" class="col">
+          <q-card flat bordered class="text-center q-py-sm" :class="s.bg">
+            <div class="text-h6">{{ s.value }}</div>
+            <div class="text-caption">{{ s.label }}</div>
+          </q-card>
+        </div>
+      </q-card-section>
+      <q-separator />
+
+      <!-- status filter -->
+      <div class="row items-center q-px-md q-py-sm">
+        <q-btn-toggle
+          v-model="statusFilter"
+          :options="statusOptions"
+          dense
+          no-caps
+          unelevated
+          toggle-color="primary"
+          color="grey-3"
+          text-color="black"
+          size="sm"
+        />
+        <q-space />
+        <div class="text-caption text-grey">{{ displayRows.length }} shown</div>
+      </div>
+      <q-separator />
+
       <q-table
-        :rows="rows"
+        :rows="displayRows"
         :columns="columns"
         row-key="ticket_ref"
         flat
@@ -131,7 +161,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { getTicketConsole, getTicketConsoleItem, autoResolveTicket } from "@/api/core";
 import { notifyError, notifySuccess } from "@/utils/notify";
 
@@ -142,6 +172,42 @@ export default {
     const loading = ref(false);
     const filter = ref("");
     const resolving = ref({});
+    const statusFilter = ref("all");
+    const statusOptions = [
+      { label: "All", value: "all" },
+      { label: "Needs input", value: "needs_input" },
+      { label: "Actionable", value: "actionable" },
+      { label: "Auto-closed", value: "cancelled_clean" },
+      { label: "Triaged", value: "triaged" },
+    ];
+    const displayRows = computed(() => {
+      const r = rows.value;
+      const f = statusFilter.value;
+      if (f === "all") return r;
+      if (f === "actionable")
+        return r.filter((x) => x.status === "actionable_unassigned" || x.status === "actionable_claimed");
+      if (f === "triaged") return r.filter((x) => x.status === "triaged" || x.status === "baseline");
+      return r.filter((x) => x.status === f);
+    });
+    const stats = computed(() => {
+      const r = rows.value;
+      const c = (fn) => r.filter(fn).length;
+      const total = r.length;
+      const autoClosed = c((x) => x.status === "cancelled_clean");
+      const needsInput = c((x) => x.status === "needs_input");
+      const actionable = c((x) => x.status === "actionable_unassigned" || x.status === "actionable_claimed");
+      const triaged = c((x) => x.status === "triaged" || x.status === "baseline");
+      // rough time-saved estimate (minutes) - first-pass triage/handling the AI did for you
+      const mins = autoClosed * 5 + actionable * 4 + needsInput * 3 + triaged * 3;
+      return [
+        { label: "Tracked", value: total, bg: "" },
+        { label: "Auto-closed (" + (total ? Math.round((autoClosed * 100) / total) : 0) + "%)", value: autoClosed, bg: "bg-blue-grey-1" },
+        { label: "Actionable", value: actionable, bg: "bg-orange-1" },
+        { label: "Needs input", value: needsInput, bg: "bg-deep-orange-1" },
+        { label: "Triaged", value: triaged, bg: "bg-grey-2" },
+        { label: "Est. hrs saved", value: (mins / 60).toFixed(1), bg: "bg-green-1" },
+      ];
+    });
     const detailDialog = ref(false);
     const detail = ref({});
     const detailRow = ref(null);
@@ -214,6 +280,7 @@ export default {
     onMounted(load);
     return {
       rows, loading, filter, columns, resolving,
+      statusFilter, statusOptions, displayRows, stats,
       detailDialog, detail, detailRow,
       fmt, statusColor, statusLabel, load, openDetail, openConsole, autoResolve,
     };
