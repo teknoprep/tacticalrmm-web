@@ -174,6 +174,8 @@
           dense
           flat
           hide-bottom
+          virtual-scroll
+          :style="{ height: aiCreatedHeight }"
           :pagination="{ rowsPerPage: 0, sortBy: 'run_at' }"
         >
           <template #body-cell-status="props">
@@ -631,7 +633,14 @@ export default {
 
     const tableHeight = computed(() => {
       const base = parseInt(tabHeight.value) || 300;
-      return `${mode.value === "scope" ? base - 60 : base}px`;
+      if (mode.value === "scope") return `${base - 60}px`;
+      // agent mode: shrink the tasks table when there's an AI-Created section below it
+      if (aiCreated.value.length) return `${Math.max(150, Math.floor(base * 0.5))}px`;
+      return `${base}px`;
+    });
+    const aiCreatedHeight = computed(() => {
+      const base = parseInt(tabHeight.value) || 300;
+      return `${Math.max(150, Math.floor(base * 0.42))}px`;
     });
 
     const columns = computed(() => {
@@ -960,6 +969,7 @@ export default {
       scope,
       headerText,
       tableHeight,
+      aiCreatedHeight,
       tabHeight,
       tasks,
       aiCreated,
