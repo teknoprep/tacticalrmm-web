@@ -61,6 +61,16 @@
         :pagination="{ rowsPerPage: 25, sortBy: 'updated', descending: true }"
         @row-click="(e, row) => openDetail(row)"
       >
+        <template #body-cell-odoo_status="props">
+          <q-td :props="props">
+            <q-badge
+              v-if="props.row.odoo_status"
+              :color="odooColor(props.row.odoo_status)"
+              :label="props.row.odoo_status"
+            />
+            <span v-else class="text-grey">—</span>
+          </q-td>
+        </template>
         <template #body-cell-status="props">
           <q-td :props="props">
             <q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" />
@@ -224,13 +234,24 @@ export default {
       { name: "client", label: "Client", field: "client", align: "left", sortable: true },
       { name: "subject", label: "Subject", field: "subject", align: "left" },
       { name: "classification", label: "Type", field: "classification", align: "left", sortable: true },
-      { name: "status", label: "Status", field: "status", align: "left", sortable: true },
+      { name: "odoo_status", label: "Ticket Status", field: "odoo_status", align: "left", sortable: true },
+      { name: "status", label: "AI Status", field: "status", align: "left", sortable: true },
       { name: "actions", label: "", field: "actions", align: "right" },
     ];
 
     function fmt(v) {
       if (!v) return "";
       try { return new Date(v).toLocaleString(); } catch (e) { return v; }
+    }
+    function odooColor(s) {
+      const k = String(s || "").toLowerCase();
+      if (k.includes("cancel")) return "blue-grey";
+      if (k.includes("closed")) return "green";
+      if (k.includes("progress")) return "teal";
+      if (k.includes("new")) return "blue";
+      if (k.includes("reopen")) return "deep-orange";
+      if (k.includes("hold") || k.includes("wait")) return "orange";
+      return "grey";
     }
     function statusColor(s) {
       return {
@@ -287,7 +308,7 @@ export default {
       rows, loading, filter, columns, resolving,
       statusFilter, statusOptions, displayRows, stats,
       detailDialog, detail, detailRow,
-      fmt, statusColor, statusLabel, load, openDetail, openConsole, autoResolve,
+      fmt, odooColor, statusColor, statusLabel, load, openDetail, openConsole, autoResolve,
     };
   },
 };
