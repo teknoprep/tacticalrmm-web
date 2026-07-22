@@ -1,6 +1,6 @@
 <template>
-  <div class="q-pa-sm" style="min-height: 100vh; background: #f5f5f5">
-    <q-card flat bordered style="width: 100%">
+  <div style="height: 100vh; display: flex; flex-direction: column; background: #f5f5f5; padding: 6px; box-sizing: border-box">
+    <q-card flat bordered style="width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0">
       <q-card-section class="bg-primary text-white row items-center q-py-sm">
         <q-icon name="smart_toy" size="sm" class="q-mr-sm" />
         <div class="text-subtitle1">Pi.dev AI — Ticket Console</div>
@@ -56,6 +56,7 @@
         row-key="ticket_ref"
         flat
         dense
+        style="flex: 1; min-height: 0"
         :loading="loading"
         :filter="filter"
         :pagination="{ rowsPerPage: 25, sortBy: 'updated', descending: true }"
