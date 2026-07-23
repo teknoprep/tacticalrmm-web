@@ -134,6 +134,10 @@
               <q-item clickable v-close-popup @click="openTicketConsole">
                 <q-item-section>AI Ticket Console</q-item-section>
               </q-item>
+              <!-- AI procedures -->
+              <q-item clickable v-close-popup @click="openProcedures">
+                <q-item-section>AI Procedures</q-item-section>
+              </q-item>
               <!-- bulk patch management -->
               <q-item clickable v-close-popup @click="showBulkAction('patch')">
                 <q-item-section>Bulk Patch Management</q-item-section>
@@ -424,6 +428,13 @@ export default {
         "/ai-ticket-console",
         "PiTicketConsole",
         "width=1500,height=950,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes",
+      );
+    },
+    openProcedures() {
+      window.open(
+        "/ai-procedures",
+        "PiProcedures",
+        "width=1400,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes",
       );
     },
     showBulkAction(mode) {

@@ -342,6 +342,61 @@
       Edit freely &mdash; leave blank to use the built‑in default.
     </div>
 
+    <q-separator class="q-my-md" />
+    <div class="text-subtitle2 q-mb-xs">AI Procedures (knowledge mining)</div>
+    <div class="text-caption text-grey q-mb-sm">
+      Learns reusable, helpdesk-agnostic procedures (symptom &rarr; cause &rarr; fix &rarr; verify) from how
+      tickets get closed &mdash; a backfill on first run, then incremental. View/edit them in
+      Tools &rarr; <strong>AI Procedures</strong>.
+    </div>
+    <q-toggle
+      :model-value="settings.ai_procedures_enabled"
+      label="Enable AI Procedures library"
+      @update:model-value="update('ai_procedures_enabled', $event)"
+    />
+    <q-toggle
+      :model-value="settings.ai_procedures_mining_enabled"
+      label="Enable automatic mining (scheduled)"
+      :disable="!settings.ai_procedures_enabled"
+      @update:model-value="update('ai_procedures_mining_enabled', $event)"
+    />
+    <div class="row q-col-gutter-md q-mt-xs q-mb-sm">
+      <q-input
+        class="col-6"
+        type="number"
+        dense
+        outlined
+        :model-value="settings.ai_procedures_interval_hours"
+        label="Run every (hours)"
+        :disable="!settings.ai_procedures_enabled"
+        @update:model-value="update('ai_procedures_interval_hours', Number($event))"
+      />
+      <q-input
+        class="col-6"
+        type="number"
+        dense
+        outlined
+        :model-value="settings.ai_procedures_backfill_days"
+        label="First-run backfill (days)"
+        :disable="!settings.ai_procedures_enabled"
+        @update:model-value="update('ai_procedures_backfill_days', Number($event))"
+      />
+    </div>
+    <div class="text-caption text-weight-medium">Procedure Mining Policy (prompt)</div>
+    <q-input
+      :model-value="settings.ai_procedures_mining_prompt"
+      type="textarea"
+      outlined
+      autogrow
+      input-style="min-height: 120px"
+      label="How to distill closed tickets into reusable procedures (leave blank for the built-in default)"
+      @update:model-value="update('ai_procedures_mining_prompt', $event)"
+    />
+    <div class="text-caption text-grey q-mb-md">
+      Controls what counts as a reusable procedure vs a one-off/client-specific fact. The miner
+      only runs when both toggles are on; the interval sets the real cadence.
+    </div>
+
     <!-- AI helpdesk-setup assistant -->
     <q-dialog v-model="assistDialog">
       <q-card style="min-width: 760px; max-width: 92vw">

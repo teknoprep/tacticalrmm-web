@@ -194,6 +194,49 @@ export async function autoResolveTicket(ticketRef: string) {
   return data as { queued: boolean };
 }
 
+export interface AIProcedure {
+  id?: number;
+  title: string;
+  category: string;
+  applies_to: string;
+  symptom: string;
+  root_cause: string;
+  fix: string;
+  verification: string;
+  occurrence_count?: number;
+  source_ticket_refs?: string[];
+  confidence?: string;
+  origin?: string;
+  status?: string;
+  updated_by?: string;
+  updated?: string;
+}
+
+export async function getProcedures(params: { q?: string; category?: string; status?: string } = {}) {
+  const { data } = await axios.get(`${baseUrl}/ai/procedures/`, { params });
+  return data as { procedures: AIProcedure[]; categories: string[]; total: number };
+}
+
+export async function createProcedure(payload: Partial<AIProcedure>) {
+  const { data } = await axios.post(`${baseUrl}/ai/procedures/`, payload);
+  return data as AIProcedure;
+}
+
+export async function updateProcedure(id: number, payload: Partial<AIProcedure>) {
+  const { data } = await axios.put(`${baseUrl}/ai/procedures/${id}/`, payload);
+  return data as AIProcedure;
+}
+
+export async function deleteProcedure(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/procedures/${id}/`);
+  return data;
+}
+
+export async function mineProceduresNow() {
+  const { data } = await axios.post(`${baseUrl}/ai/procedures/mine-now/`, {});
+  return data as { queued: boolean };
+}
+
 export async function createDecisionSession(token: string, payload: object = {}) {
   // Mint a stateful, streaming decision-chat session (same machinery as the device chat).
   const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/session/`, payload);

@@ -17,6 +17,7 @@
         >
           <template #prepend><q-icon name="search" /></template>
         </q-input>
+        <q-btn dense flat no-caps icon="menu_book" label="Procedures" class="q-mr-sm" @click="openProcedures" />
         <q-btn dense flat round icon="refresh" :loading="loading" @click="load" />
       </q-card-section>
       <q-separator />
@@ -250,6 +251,8 @@ export default {
     const detailDialog = ref(false);
     const detail = ref({});
     const detailRow = ref(null);
+    const openProcedures = () =>
+      window.open("/ai-procedures", "pi-procedures", "width=1400,height=900,menubar=no,toolbar=no");
 
     const columns = [
       { name: "updated", label: "Last worked", field: "updated", align: "left", sortable: true,
@@ -334,7 +337,7 @@ export default {
     return {
       rows, loading, filter, columns, resolving,
       statusFilter, statusOptions, displayRows, stats,
-      detailDialog, detail, detailRow,
+      detailDialog, detail, detailRow, openProcedures,
       fmt, odooColor, statusColor, statusLabel, load, openDetail, openConsole, autoResolve,
     };
   },
