@@ -230,8 +230,14 @@ export default {
       const needsInput = c((x) => x.status === "needs_input");
       const actionable = c((x) => x.status === "actionable_unassigned" || x.status === "actionable_claimed");
       const triaged = c((x) => x.status === "triaged" || x.status === "baseline");
-      // rough time-saved estimate (minutes) - first-pass triage/handling the AI did for you
-      const mins = autoClosed * 5 + actionable * 4 + needsInput * 3 + triaged * 3;
+      // Time-saved estimate (minutes). MUST be cumulative/monotonic: the AI triaged &
+      // first-passed EVERY tracked ticket, and that work is banked no matter where the
+      // ticket later ends up. Crediting only transient states (triaged/actionable/needs-
+      // input) made the number DROP as tickets moved to terminal states that credited
+      // nothing. Credit every tracked ticket a base triage pass, plus a bonus for the
+      // clean alerts the AI fully auto-closed (no human touched them). Both counts only
+      // grow, so the estimate never goes backward.
+      const mins = total * 4 + autoClosed * 6;
       return [
         { label: "Tracked", value: total, bg: "" },
         { label: "Auto-closed (" + (total ? Math.round((autoClosed * 100) / total) : 0) + "%)", value: autoClosed, bg: "bg-blue-grey-1" },
