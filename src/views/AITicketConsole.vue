@@ -82,6 +82,19 @@
             {{ props.row.subject }}
           </q-td>
         </template>
+        <template #body-cell-assigned_to="props">
+          <q-td :props="props">
+            <template v-if="!props.row.assigned_to">
+              <span class="text-grey">—</span>
+            </template>
+            <template v-else-if="props.row.assigned_to_bot">
+              <q-icon name="smart_toy" size="xs" color="deep-purple" class="q-mr-xs" />Pi (AI)
+            </template>
+            <template v-else>
+              <q-icon name="person" size="xs" color="blue-grey" class="q-mr-xs" />{{ props.row.assigned_to }}
+            </template>
+          </q-td>
+        </template>
         <template #body-cell-classification="props">
           <q-td :props="props">
             <q-icon
@@ -238,6 +251,7 @@ export default {
       { name: "ticket_ref", label: "Ticket", field: "ticket_ref", align: "left", sortable: true },
       { name: "client", label: "Client", field: "client", align: "left", sortable: true },
       { name: "subject", label: "Subject", field: "subject", align: "left" },
+      { name: "assigned_to", label: "Assigned To", field: "assigned_to", align: "left", sortable: true },
       { name: "classification", label: "Type", field: "classification", align: "left", sortable: true },
       { name: "odoo_status", label: "Ticket Status", field: "odoo_status", align: "left", sortable: true },
       { name: "status", label: "AI Status", field: "status", align: "left", sortable: true },

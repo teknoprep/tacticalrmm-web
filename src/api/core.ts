@@ -174,6 +174,7 @@ export async function getTicketConsole() {
     ticket_ref: string; subject: string; client: string; device: string;
     requester: string; status: string; classification: string; is_alert: boolean;
     summary: string; proposed_action: string; updated: string;
+    odoo_status: string; assigned_to: string; assigned_to_bot: boolean;
     token: string | null; decision_url: string;
   }[];
 }
