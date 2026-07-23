@@ -188,18 +188,22 @@ export default {
     const loading = ref(false);
     const filter = ref("");
     const resolving = ref({});
-    const statusFilter = ref("all");
+    const statusFilter = ref("open");
+    const TERMINAL = ["cancelled_clean", "cancelled", "closed", "done", "resolved"];
     const statusOptions = [
+      { label: "Open", value: "open" },
       { label: "All", value: "all" },
       { label: "Needs input", value: "needs_input" },
       { label: "Actionable", value: "actionable" },
-      { label: "Auto-closed", value: "cancelled_clean" },
       { label: "Triaged", value: "triaged" },
+      { label: "Closed/Cancelled", value: "terminal" },
     ];
     const displayRows = computed(() => {
       const r = rows.value;
       const f = statusFilter.value;
       if (f === "all") return r;
+      if (f === "open") return r.filter((x) => !TERMINAL.includes(x.status));
+      if (f === "terminal") return r.filter((x) => TERMINAL.includes(x.status));
       if (f === "actionable")
         return r.filter((x) => x.status === "actionable_unassigned" || x.status === "actionable_claimed");
       if (f === "triaged") return r.filter((x) => x.status === "triaged" || x.status === "baseline");
@@ -256,13 +260,15 @@ export default {
     }
     function statusColor(s) {
       return {
-        cancelled_clean: "blue-grey", actionable_claimed: "teal", actionable_unassigned: "orange",
+        cancelled_clean: "blue-grey", cancelled: "blue-grey", closed: "green", done: "green",
+        resolved: "green", actionable_claimed: "teal", actionable_unassigned: "orange",
         needs_input: "deep-orange", triaged: "grey", error: "red", baseline: "grey",
       }[s] || "grey";
     }
     function statusLabel(s) {
       return {
-        cancelled_clean: "auto-closed (clean alert)", actionable_claimed: "claimed",
+        cancelled_clean: "auto-closed (clean alert)", cancelled: "cancelled", closed: "closed",
+        done: "done", resolved: "resolved", actionable_claimed: "claimed",
         actionable_unassigned: "actionable", needs_input: "needs input",
         triaged: "triaged", error: "error", baseline: "baseline",
       }[s] || s;
