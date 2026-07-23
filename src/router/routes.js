@@ -96,14 +96,6 @@ const routes = [
       requireAuth: true,
     },
   },
-  {
-    path: "/ai-scheduled-actions",
-    name: "AIScheduledActions",
-    component: () => import("@/views/AIScheduledActions.vue"),
-    meta: {
-      requireAuth: true,
-    },
-  },
 
   {
     path: "/webterm",
