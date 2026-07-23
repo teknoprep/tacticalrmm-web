@@ -262,7 +262,7 @@ export default {
       return {
         cancelled_clean: "blue-grey", cancelled: "blue-grey", closed: "green", done: "green",
         resolved: "green", actionable_claimed: "teal", actionable_unassigned: "orange",
-        needs_input: "deep-orange", triaged: "grey", error: "red", baseline: "grey",
+        needs_input: "deep-orange", triaged: "amber", error: "red", baseline: "grey",
       }[s] || "grey";
     }
     function statusLabel(s) {
