@@ -196,6 +196,7 @@ export async function autoResolveTicket(ticketRef: string) {
 
 export interface AIProcedure {
   id?: number;
+  code?: string;
   title: string;
   category: string;
   applies_to: string;

@@ -114,7 +114,10 @@
       <q-card style="width: 840px; max-width: 96vw">
         <q-card-section class="row items-center bg-primary text-white q-py-sm">
           <q-icon name="menu_book" size="sm" class="q-mr-sm" />
-          <div class="text-subtitle1">{{ edit.id ? "Edit procedure" : "New procedure" }}</div>
+          <div class="text-subtitle1">
+            {{ edit.id ? "Edit procedure" : "New procedure" }}
+            <span v-if="edit.code" class="text-weight-bold q-ml-sm">#{{ edit.code }}</span>
+          </div>
           <q-space />
           <q-badge v-if="edit.confidence" :color="confColor(edit.confidence)" class="q-mr-xs" :label="edit.confidence" />
           <q-badge v-if="edit.id" color="white" text-color="primary" :label="'seen ' + (edit.occurrence_count || 1) + '×'" />
@@ -210,6 +213,7 @@ export default defineComponent({
     const edit = ref({});
 
     const columns = [
+      { name: "code", label: "ID", field: "code", align: "left", sortable: true },
       { name: "title", label: "Title", field: "title", align: "left", sortable: true },
       { name: "category", label: "Category", field: "category", align: "left", sortable: true },
       { name: "applies_to", label: "Applies to", field: "applies_to", align: "left" },
