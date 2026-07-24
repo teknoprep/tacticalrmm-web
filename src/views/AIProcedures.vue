@@ -235,7 +235,16 @@
         </q-card-section>
         <q-separator />
         <q-card-actions align="right">
-          <q-btn flat :loading="mining" color="primary" icon="auto_awesome" label="Mine now" @click="mine" />
+          <q-btn
+            v-if="live.running"
+            flat
+            color="negative"
+            icon="stop_circle"
+            label="Stop"
+            :loading="stopping"
+            @click="stopMine"
+          />
+          <q-btn v-else flat :loading="mining" color="primary" icon="auto_awesome" label="Mine now" @click="mine" />
           <q-btn flat label="Close" v-close-popup />
         </q-card-actions>
       </q-card>
@@ -253,6 +262,7 @@ import {
   deleteProcedure,
   mineProceduresNow,
   getMiningStatus,
+  stopMining,
 } from "@/api/core";
 
 export default defineComponent({
@@ -274,6 +284,7 @@ export default defineComponent({
     const liveDialog = ref(false);
     const live = ref({ running: false, phase: "idle", log: [] });
     const logBox = ref(null);
+    const stopping = ref(false);
     let pollTimer = null;
 
     const columns = [
@@ -366,6 +377,15 @@ export default defineComponent({
       clearInterval(pollTimer);
       pollTimer = setInterval(pollLive, 1500);
     }
+    async function stopMine() {
+      stopping.value = true;
+      try {
+        await stopMining();
+        $q.notify({ type: "info", message: "Stop requested \u2014 it will finish the current ticket and exit." });
+      } finally {
+        stopping.value = false;
+      }
+    }
     // keep the header button's running-state fresh even when the dialog is closed
     const headTimer = setInterval(pollLive, 4000);
     pollLive();
@@ -417,7 +437,7 @@ export default defineComponent({
     return {
       rows, categories, total, loading, mining, saving, q, category, statusFilter,
       editDialog, edit, editIndex, columns, confColor, statusColor,
-      liveDialog, live, logBox, openLive,
+      liveDialog, live, logBox, openLive, stopping, stopMine,
       load, openNew, openEdit, goPrev, goNext, acceptNext, acceptDelete, save, setStatus, remove, mine,
     };
   },

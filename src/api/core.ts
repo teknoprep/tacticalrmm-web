@@ -238,6 +238,11 @@ export async function mineProceduresNow() {
   return data as { queued: boolean };
 }
 
+export async function stopMining() {
+  const { data } = await axios.post(`${baseUrl}/ai/procedures/mining-stop/`, {});
+  return data as { stopping: boolean };
+}
+
 export async function getMiningStatus() {
   const { data } = await axios.get(`${baseUrl}/ai/procedures/mining-status/`);
   return data as {
