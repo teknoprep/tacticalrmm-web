@@ -414,10 +414,12 @@
           </div>
           <div v-for="(m, i) in assistMessages" :key="i">
             <q-chat-message
-              :text="[m.text]"
               :sent="m.role === 'user'"
               :bg-color="m.role === 'user' ? 'blue-2' : 'grey-3'"
-            />
+            >
+              <div v-if="m.role === 'user'" style="white-space:pre-wrap">{{ m.text }}</div>
+              <div v-else class="md-body" v-html="renderMarkdown(m.text)"></div>
+            </q-chat-message>
             <div v-if="m.policy || m.code" class="q-gutter-xs q-mb-md">
               <q-btn
                 v-if="m.policy"
@@ -592,6 +594,7 @@ import {
   helpdeskAssist,
 } from "@/api/core";
 import { notifySuccess, notifyError } from "@/utils/notify";
+import { renderMarkdown } from "@/utils/markdown";
 
 export default {
   name: "AISettings",
@@ -888,6 +891,7 @@ export default {
 
     return {
       apiKeyPlaceholder,
+      renderMarkdown,
       assistDialog,
       assistMessages,
       assistInput,
