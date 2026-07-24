@@ -18,6 +18,18 @@
         >
           <template #prepend><q-icon name="search" /></template>
         </q-input>
+        <q-btn
+          dense
+          flat
+          no-caps
+          :icon="live.running ? 'sync' : 'monitor_heart'"
+          :label="live.running ? 'Mining\u2026' : 'Live'"
+          :color="live.running ? 'yellow-3' : undefined"
+          class="q-mr-sm"
+          @click="openLive"
+        >
+          <q-tooltip>Live mining activity</q-tooltip>
+        </q-btn>
         <q-btn dense flat round icon="add" class="q-mr-xs" @click="openNew">
           <q-tooltip>Add procedure</q-tooltip>
         </q-btn>
@@ -176,9 +188,55 @@
         </q-card-section>
 
         <q-separator />
-        <q-card-actions align="right">
+        <q-card-actions class="row items-center q-px-md">
+          <q-btn dense flat round icon="chevron_left" :disable="editIndex <= 0" @click="goPrev">
+            <q-tooltip>Previous ({{ editIndex + 1 }} / {{ rows.length }})</q-tooltip>
+          </q-btn>
+          <div class="text-caption text-grey-7">{{ editIndex + 1 }} / {{ rows.length }}</div>
+          <q-btn dense flat round icon="chevron_right" :disable="editIndex >= rows.length - 1" @click="goNext">
+            <q-tooltip>Next</q-tooltip>
+          </q-btn>
+          <q-space />
+          <q-btn v-if="edit.id" flat color="negative" icon="delete" label="Delete" @click="acceptDelete" />
+          <q-btn v-if="edit.id" flat color="positive" icon="check_circle" label="Accept" @click="acceptNext" />
           <q-btn flat label="Cancel" v-close-popup />
           <q-btn color="primary" label="Save" :loading="saving" @click="save" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- live mining activity -->
+    <q-dialog v-model="liveDialog">
+      <q-card style="width: 820px; max-width: 96vw">
+        <q-card-section class="row items-center bg-primary text-white q-py-sm">
+          <q-icon :name="live.running ? 'sync' : 'monitor_heart'" size="sm" class="q-mr-sm" />
+          <div class="text-subtitle1">Live mining activity</div>
+          <q-space />
+          <q-badge :color="live.running ? 'green' : 'grey'" :label="live.running ? 'RUNNING' : (live.phase || 'idle')" />
+        </q-card-section>
+        <q-card-section class="row q-col-gutter-sm text-center q-py-sm">
+          <div class="col"><div class="text-h6">{{ live.window || 0 }}</div><div class="text-caption">In window</div></div>
+          <div class="col"><div class="text-h6">{{ live.to_mine || 0 }}</div><div class="text-caption">To mine</div></div>
+          <div class="col"><div class="text-h6">{{ live.done || 0 }}</div><div class="text-caption">Done</div></div>
+          <div class="col"><div class="text-h6">{{ live.procedures_found || 0 }}</div><div class="text-caption">Procedures</div></div>
+          <div class="col"><div class="text-h6">{{ live.kb_updates || 0 }}</div><div class="text-caption">KB updates</div></div>
+        </q-card-section>
+        <div v-if="live.current_company" class="q-px-md text-caption text-grey-8">
+          Current company: <b>{{ live.current_company }}</b>
+        </div>
+        <q-separator class="q-mt-sm" />
+        <q-card-section class="q-pa-none">
+          <div ref="logBox" class="mining-log">
+            <div v-for="(l, i) in (live.log || [])" :key="i" class="mining-log-line">
+              <span class="text-grey-6">{{ l.t ? l.t.slice(11, 19) : "" }}</span> {{ l.line }}
+            </div>
+            <div v-if="!(live.log || []).length" class="text-grey-6 q-pa-md">No activity yet. Click “Mine closed tickets now” to start.</div>
+          </div>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right">
+          <q-btn flat :loading="mining" color="primary" icon="auto_awesome" label="Mine now" @click="mine" />
+          <q-btn flat label="Close" v-close-popup />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -186,7 +244,7 @@
 </template>
 
 <script>
-import { defineComponent, ref } from "vue";
+import { defineComponent, ref, onBeforeUnmount, nextTick } from "vue";
 import { useQuasar } from "quasar";
 import {
   getProcedures,
@@ -194,6 +252,7 @@ import {
   updateProcedure,
   deleteProcedure,
   mineProceduresNow,
+  getMiningStatus,
 } from "@/api/core";
 
 export default defineComponent({
@@ -211,6 +270,11 @@ export default defineComponent({
     const statusFilter = ref("");
     const editDialog = ref(false);
     const edit = ref({});
+    const editIndex = ref(-1);
+    const liveDialog = ref(false);
+    const live = ref({ running: false, phase: "idle", log: [] });
+    const logBox = ref(null);
+    let pollTimer = null;
 
     const columns = [
       { name: "code", label: "ID", field: "code", align: "left", sortable: true },
@@ -244,12 +308,68 @@ export default defineComponent({
 
     function openNew() {
       edit.value = { title: "", category: "", applies_to: "", symptom: "", root_cause: "", fix: "", verification: "", status: "draft", origin: "human" };
+      editIndex.value = -1;
       editDialog.value = true;
     }
     function openEdit(row) {
       edit.value = { ...row };
+      editIndex.value = rows.value.findIndex((r) => r.id === row.id);
       editDialog.value = true;
     }
+    function loadAt(i) {
+      if (i < 0 || i >= rows.value.length) return;
+      editIndex.value = i;
+      edit.value = { ...rows.value[i] };
+    }
+    const goPrev = () => loadAt(editIndex.value - 1);
+    const goNext = () => loadAt(editIndex.value + 1);
+
+    // Accept = approve current, then advance to the next (fast review flow).
+    async function acceptNext() {
+      const i = editIndex.value;
+      try {
+        const saved = await updateProcedure(edit.value.id, { ...edit.value, status: "approved" });
+        if (rows.value[i]) rows.value[i] = { ...rows.value[i], ...saved };
+      } catch (e) {
+        $q.notify({ type: "negative", message: "Approve failed" });
+        return;
+      }
+      if (i < rows.value.length - 1) loadAt(i + 1);
+      else editDialog.value = false;
+    }
+    // Delete = remove current, load whatever now sits at this index (the next one).
+    async function acceptDelete() {
+      const i = editIndex.value;
+      const id = edit.value.id;
+      try {
+        await deleteProcedure(id);
+      } catch (e) {
+        $q.notify({ type: "negative", message: "Delete failed" });
+        return;
+      }
+      rows.value.splice(i, 1);
+      total.value = Math.max(0, total.value - 1);
+      if (!rows.value.length) editDialog.value = false;
+      else loadAt(Math.min(i, rows.value.length - 1));
+    }
+
+    async function pollLive() {
+      try {
+        live.value = await getMiningStatus();
+        await nextTick();
+        if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
+      } catch (e) { /* ignore */ }
+    }
+    function openLive() {
+      liveDialog.value = true;
+      pollLive();
+      clearInterval(pollTimer);
+      pollTimer = setInterval(pollLive, 1500);
+    }
+    // keep the header button's running-state fresh even when the dialog is closed
+    const headTimer = setInterval(pollLive, 4000);
+    pollLive();
+    onBeforeUnmount(() => { clearInterval(pollTimer); clearInterval(headTimer); });
 
     async function save() {
       saving.value = true;
@@ -296,8 +416,9 @@ export default defineComponent({
     load();
     return {
       rows, categories, total, loading, mining, saving, q, category, statusFilter,
-      editDialog, edit, columns, confColor, statusColor,
-      load, openNew, openEdit, save, setStatus, remove, mine,
+      editDialog, edit, editIndex, columns, confColor, statusColor,
+      liveDialog, live, logBox, openLive,
+      load, openNew, openEdit, goPrev, goNext, acceptNext, acceptDelete, save, setStatus, remove, mine,
     };
   },
 });
@@ -319,5 +440,20 @@ export default defineComponent({
 /* rows are double-clickable to open */
 .proc-table :deep(tbody tr) {
   cursor: pointer;
+}
+/* live mining log */
+.mining-log {
+  height: 320px;
+  overflow-y: auto;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 12px;
+}
+.mining-log-line {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

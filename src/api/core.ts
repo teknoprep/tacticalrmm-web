@@ -238,6 +238,15 @@ export async function mineProceduresNow() {
   return data as { queued: boolean };
 }
 
+export async function getMiningStatus() {
+  const { data } = await axios.get(`${baseUrl}/ai/procedures/mining-status/`);
+  return data as {
+    running: boolean; phase: string; window?: number; to_mine?: number; done?: number;
+    companies?: number; current_company?: string; procedures_found?: number; kb_updates?: number;
+    started?: string; updated?: string; log?: { t: string; line: string }[];
+  };
+}
+
 export async function createDecisionSession(token: string, payload: object = {}) {
   // Mint a stateful, streaming decision-chat session (same machinery as the device chat).
   const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/session/`, payload);
