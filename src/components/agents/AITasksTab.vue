@@ -565,6 +565,7 @@ import {
   deleteScheduledAction,
 } from "@/api/core";
 import { runPiChat } from "@/api/agents";
+import { renderMarkdown } from "@/utils/markdown";
 import { notifySuccess, notifyError } from "@/utils/notify";
 
 export default {
