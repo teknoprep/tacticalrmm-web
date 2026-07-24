@@ -215,7 +215,7 @@ export interface AIProcedure {
 
 export async function getProcedures(params: { q?: string; category?: string; status?: string } = {}) {
   const { data } = await axios.get(`${baseUrl}/ai/procedures/`, { params });
-  return data as { procedures: AIProcedure[]; categories: string[]; total: number };
+  return data as { procedures: AIProcedure[]; categories: string[]; all_categories: string[]; total: number };
 }
 
 export async function createProcedure(payload: Partial<AIProcedure>) {

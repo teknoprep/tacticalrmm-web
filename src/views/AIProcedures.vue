@@ -139,7 +139,15 @@
         <q-card-section class="scroll q-pt-md" style="max-height: 74vh">
           <q-input v-model="edit.title" outlined dense autogrow label="Title" class="q-mb-md" />
           <div class="row q-col-gutter-md q-mb-md">
-            <q-input v-model="edit.category" class="col-12 col-sm-5" outlined dense label="Category" />
+            <q-select
+              v-model="edit.category"
+              class="col-12 col-sm-5"
+              outlined
+              dense
+              label="Category"
+              :options="allCategories"
+              options-dense
+            />
             <q-input
               v-model="edit.applies_to"
               class="col-12 col-sm-7"
@@ -272,6 +280,7 @@ export default defineComponent({
     const $q = useQuasar();
     const rows = ref([]);
     const categories = ref([]);
+    const allCategories = ref([]);
     const total = ref(0);
     const loading = ref(false);
     const mining = ref(false);
@@ -314,6 +323,7 @@ export default defineComponent({
         const data = await getProcedures({ q: q.value, category: category.value, status: statusFilter.value });
         rows.value = data.procedures;
         categories.value = data.categories;
+        allCategories.value = data.all_categories || data.categories;
         total.value = data.total;
       } catch (e) {
         $q.notify({ type: "negative", message: "Failed to load procedures" });
@@ -468,7 +478,7 @@ export default defineComponent({
 
     load();
     return {
-      rows, categories, total, loading, mining, saving, q, category, statusFilter,
+      rows, categories, allCategories, total, loading, mining, saving, q, category, statusFilter,
       editDialog, edit, editIndex, navList, procTable, pagination, columns, confColor, statusColor,
       liveDialog, live, logBox, openLive, onLiveHide, stopping, stopMine,
       load, openNew, openEdit, goPrev, goNext, acceptNext, acceptDelete, save, setStatus, remove, mine,
