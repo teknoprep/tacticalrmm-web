@@ -73,13 +73,14 @@
 
       <div style="flex: 1; min-height: 0; overflow: auto">
         <q-table
+          ref="procTable"
+          v-model:pagination="pagination"
           :rows="rows"
           :columns="columns"
           row-key="id"
           flat
           dense
           :loading="loading"
-          :pagination="{ rowsPerPage: 0, sortBy: 'updated', descending: true }"
           hide-bottom
           separator="horizontal"
           class="proc-table"
@@ -190,10 +191,10 @@
         <q-separator />
         <q-card-actions class="row items-center q-px-md">
           <q-btn dense flat round icon="chevron_left" :disable="editIndex <= 0" @click="goPrev">
-            <q-tooltip>Previous ({{ editIndex + 1 }} / {{ rows.length }})</q-tooltip>
+            <q-tooltip>Previous ({{ editIndex + 1 }} / {{ navList.length }})</q-tooltip>
           </q-btn>
-          <div class="text-caption text-grey-7">{{ editIndex + 1 }} / {{ rows.length }}</div>
-          <q-btn dense flat round icon="chevron_right" :disable="editIndex >= rows.length - 1" @click="goNext">
+          <div class="text-caption text-grey-7">{{ editIndex + 1 }} / {{ navList.length }}</div>
+          <q-btn dense flat round icon="chevron_right" :disable="editIndex >= navList.length - 1" @click="goNext">
             <q-tooltip>Next</q-tooltip>
           </q-btn>
           <q-space />
@@ -281,6 +282,9 @@ export default defineComponent({
     const editDialog = ref(false);
     const edit = ref({});
     const editIndex = ref(-1);
+    const navList = ref([]);
+    const procTable = ref(null);
+    const pagination = ref({ rowsPerPage: 0, sortBy: "updated", descending: true });
     const liveDialog = ref(false);
     const live = ref({ running: false, phase: "idle", log: [] });
     const logBox = ref(null);
@@ -318,35 +322,43 @@ export default defineComponent({
       }
     }
 
+    // the list in the SAME order the table is currently showing (respects sort + filter)
+    function orderedRows() {
+      const t = procTable.value;
+      return t && t.filteredSortedRows && t.filteredSortedRows.length ? t.filteredSortedRows : rows.value;
+    }
     function openNew() {
       edit.value = { title: "", category: "", applies_to: "", symptom: "", root_cause: "", fix: "", verification: "", status: "draft", origin: "human" };
       editIndex.value = -1;
+      navList.value = [];
       editDialog.value = true;
     }
     function openEdit(row) {
+      navList.value = orderedRows().slice(); // snapshot the on-screen order
+      editIndex.value = navList.value.findIndex((r) => r.id === row.id);
       edit.value = { ...row };
-      editIndex.value = rows.value.findIndex((r) => r.id === row.id);
       editDialog.value = true;
     }
     function loadAt(i) {
-      if (i < 0 || i >= rows.value.length) return;
+      if (i < 0 || i >= navList.value.length) return;
       editIndex.value = i;
-      edit.value = { ...rows.value[i] };
+      edit.value = { ...navList.value[i] };
     }
     const goPrev = () => loadAt(editIndex.value - 1);
     const goNext = () => loadAt(editIndex.value + 1);
+    const mergeInto = (arr, saved) => { const j = arr.findIndex((r) => r.id === saved.id); if (j >= 0) arr[j] = { ...arr[j], ...saved }; };
 
-    // Accept = approve current, then advance to the next (fast review flow).
+    // Accept = approve current, then advance to the next in the displayed order.
     async function acceptNext() {
       const i = editIndex.value;
       try {
         const saved = await updateProcedure(edit.value.id, { ...edit.value, status: "approved" });
-        if (rows.value[i]) rows.value[i] = { ...rows.value[i], ...saved };
+        mergeInto(rows.value, saved); mergeInto(navList.value, saved);
       } catch (e) {
         $q.notify({ type: "negative", message: "Approve failed" });
         return;
       }
-      if (i < rows.value.length - 1) loadAt(i + 1);
+      if (i < navList.value.length - 1) loadAt(i + 1);
       else editDialog.value = false;
     }
     // Delete = remove current, load whatever now sits at this index (the next one).
@@ -359,10 +371,12 @@ export default defineComponent({
         $q.notify({ type: "negative", message: "Delete failed" });
         return;
       }
-      rows.value.splice(i, 1);
+      const rj = rows.value.findIndex((r) => r.id === id);
+      if (rj >= 0) rows.value.splice(rj, 1);
+      navList.value.splice(i, 1);
       total.value = Math.max(0, total.value - 1);
-      if (!rows.value.length) editDialog.value = false;
-      else loadAt(Math.min(i, rows.value.length - 1));
+      if (!navList.value.length) editDialog.value = false;
+      else loadAt(Math.min(i, navList.value.length - 1));
     }
 
     // scroll=true only auto-scrolls the log if you're already near the bottom, so it
@@ -455,7 +469,7 @@ export default defineComponent({
     load();
     return {
       rows, categories, total, loading, mining, saving, q, category, statusFilter,
-      editDialog, edit, editIndex, columns, confColor, statusColor,
+      editDialog, edit, editIndex, navList, procTable, pagination, columns, confColor, statusColor,
       liveDialog, live, logBox, openLive, onLiveHide, stopping, stopMine,
       load, openNew, openEdit, goPrev, goNext, acceptNext, acceptDelete, save, setStatus, remove, mine,
     };
