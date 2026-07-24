@@ -70,6 +70,8 @@
           :pagination="{ rowsPerPage: 0, sortBy: 'updated', descending: true }"
           hide-bottom
           separator="horizontal"
+          class="proc-table"
+          @row-dblclick="(e, row) => openEdit(row)"
         >
           <template #body-cell-confidence="props">
             <q-td :props="props">
@@ -109,42 +111,68 @@
 
     <!-- editor -->
     <q-dialog v-model="editDialog" persistent>
-      <q-card style="width: 760px; max-width: 95vw">
+      <q-card style="width: 840px; max-width: 96vw">
         <q-card-section class="row items-center bg-primary text-white q-py-sm">
+          <q-icon name="menu_book" size="sm" class="q-mr-sm" />
           <div class="text-subtitle1">{{ edit.id ? "Edit procedure" : "New procedure" }}</div>
           <q-space />
+          <q-badge v-if="edit.confidence" :color="confColor(edit.confidence)" class="q-mr-xs" :label="edit.confidence" />
           <q-badge v-if="edit.id" color="white" text-color="primary" :label="'seen ' + (edit.occurrence_count || 1) + '×'" />
         </q-card-section>
-        <q-card-section class="q-gutter-sm scroll" style="max-height: 70vh">
-          <div class="row q-col-gutter-sm">
-            <q-input v-model="edit.title" class="col-8" dense outlined label="Title" />
-            <q-input v-model="edit.category" class="col-4" dense outlined label="Category" />
+
+        <q-card-section class="scroll q-pt-md" style="max-height: 74vh">
+          <q-input v-model="edit.title" outlined dense autogrow label="Title" class="q-mb-md" />
+          <div class="row q-col-gutter-md q-mb-md">
+            <q-input v-model="edit.category" class="col-12 col-sm-5" outlined dense label="Category" />
+            <q-input
+              v-model="edit.applies_to"
+              class="col-12 col-sm-7"
+              outlined
+              dense
+              autogrow
+              label="Applies to (vendor / app / OS keywords)"
+            />
           </div>
-          <q-input v-model="edit.applies_to" dense outlined label="Applies to (vendor/app/OS keywords)" />
-          <q-input v-model="edit.symptom" type="textarea" autogrow dense outlined label="Symptom" />
-          <q-input v-model="edit.root_cause" type="textarea" autogrow dense outlined label="Root cause" />
-          <q-input v-model="edit.fix" type="textarea" autogrow dense outlined label="Fix (steps)" />
-          <q-input v-model="edit.verification" type="textarea" autogrow dense outlined label="Verification" />
-          <div class="row q-col-gutter-sm">
+
+          <div class="proc-label">Symptom</div>
+          <q-input v-model="edit.symptom" type="textarea" outlined autogrow input-style="min-height:56px" class="q-mb-md" />
+          <div class="proc-label">Root cause</div>
+          <q-input v-model="edit.root_cause" type="textarea" outlined autogrow input-style="min-height:56px" class="q-mb-md" />
+          <div class="proc-label">Fix (steps)</div>
+          <q-input v-model="edit.fix" type="textarea" outlined autogrow input-style="min-height:120px" class="q-mb-md" />
+          <div class="proc-label">Verification</div>
+          <q-input v-model="edit.verification" type="textarea" outlined autogrow input-style="min-height:56px" class="q-mb-md" />
+
+          <q-separator class="q-my-sm" />
+          <div class="row q-col-gutter-md items-center">
             <q-select
               v-model="edit.status"
-              class="col-4"
-              dense
+              class="col-12 col-sm-4"
               outlined
+              dense
               label="Status"
               :options="['draft', 'approved', 'retired']"
             />
-            <q-input class="col-4" dense outlined readonly label="Origin" :model-value="edit.origin || 'human'" />
-            <q-input
-              class="col-4"
-              dense
-              outlined
-              readonly
-              label="Source tickets"
-              :model-value="(edit.source_ticket_refs || []).join(', ')"
-            />
+            <div class="col-12 col-sm-8 text-caption text-grey-7">
+              <span class="q-mr-md">Origin: <b>{{ edit.origin || "human" }}</b></span>
+              <span v-if="edit.updated_by">Last edited by <b>{{ edit.updated_by }}</b></span>
+            </div>
+          </div>
+          <div v-if="(edit.source_ticket_refs || []).length" class="q-mt-md">
+            <div class="proc-label">Source tickets</div>
+            <div class="row q-gutter-xs">
+              <q-badge
+                v-for="r in edit.source_ticket_refs"
+                :key="r"
+                color="blue-grey-2"
+                text-color="black"
+                :label="r"
+              />
+            </div>
           </div>
         </q-card-section>
+
+        <q-separator />
         <q-card-actions align="right">
           <q-btn flat label="Cancel" v-close-popup />
           <q-btn color="primary" label="Save" :loading="saving" @click="save" />
@@ -270,3 +298,22 @@ export default defineComponent({
   },
 });
 </script>
+
+<style scoped>
+/* readable, aligned labels above each multi-line field */
+.proc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #37474f;
+  margin-bottom: 4px;
+}
+/* larger, easier-to-read text in the editor's textareas */
+:deep(.q-textarea .q-field__native) {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+/* rows are double-clickable to open */
+.proc-table :deep(tbody tr) {
+  cursor: pointer;
+}
+</style>
