@@ -206,7 +206,7 @@
     </q-dialog>
 
     <!-- live mining activity -->
-    <q-dialog v-model="liveDialog">
+    <q-dialog v-model="liveDialog" @hide="onLiveHide">
       <q-card style="width: 820px; max-width: 96vw">
         <q-card-section class="row items-center bg-primary text-white q-py-sm">
           <q-icon :name="live.running ? 'sync' : 'monitor_heart'" size="sm" class="q-mr-sm" />
@@ -221,8 +221,8 @@
           <div class="col"><div class="text-h6">{{ live.procedures_found || 0 }}</div><div class="text-caption">Procedures</div></div>
           <div class="col"><div class="text-h6">{{ live.kb_updates || 0 }}</div><div class="text-caption">KB updates</div></div>
         </q-card-section>
-        <div v-if="live.current_company" class="q-px-md text-caption text-grey-8">
-          Current company: <b>{{ live.current_company }}</b>
+        <div class="q-px-md text-caption text-grey-8" style="min-height: 18px">
+          <template v-if="live.current_company">Current company: <b>{{ live.current_company }}</b></template>
         </div>
         <q-separator class="q-mt-sm" />
         <q-card-section class="q-pa-none">
@@ -286,6 +286,7 @@ export default defineComponent({
     const logBox = ref(null);
     const stopping = ref(false);
     let pollTimer = null;
+    let headTimer = null;
 
     const columns = [
       { name: "code", label: "ID", field: "code", align: "left", sortable: true },
@@ -364,18 +365,36 @@ export default defineComponent({
       else loadAt(Math.min(i, rows.value.length - 1));
     }
 
-    async function pollLive() {
+    // scroll=true only auto-scrolls the log if you're already near the bottom, so it
+    // never yanks the view while you're reading higher up.
+    async function pollLive(scroll) {
       try {
         live.value = await getMiningStatus();
-        await nextTick();
-        if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
+        if (scroll) {
+          await nextTick();
+          const el = logBox.value;
+          if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 80) el.scrollTop = el.scrollHeight;
+        }
       } catch (e) { /* ignore */ }
     }
-    function openLive() {
+    // background heartbeat (button state) - stops while the dialog is open so the two
+    // timers never fight each other.
+    function startHead() {
+      clearInterval(headTimer);
+      headTimer = setInterval(() => pollLive(false), 5000);
+    }
+    async function openLive() {
       liveDialog.value = true;
-      pollLive();
+      clearInterval(headTimer);
       clearInterval(pollTimer);
-      pollTimer = setInterval(pollLive, 1500);
+      await pollLive(false);
+      await nextTick();
+      if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight; // jump to bottom once on open
+      pollTimer = setInterval(() => pollLive(true), 2000);
+    }
+    function onLiveHide() {
+      clearInterval(pollTimer);
+      startHead();
     }
     async function stopMine() {
       stopping.value = true;
@@ -387,8 +406,8 @@ export default defineComponent({
       }
     }
     // keep the header button's running-state fresh even when the dialog is closed
-    const headTimer = setInterval(pollLive, 4000);
-    pollLive();
+    pollLive(false);
+    startHead();
     onBeforeUnmount(() => { clearInterval(pollTimer); clearInterval(headTimer); });
 
     async function save() {
@@ -437,7 +456,7 @@ export default defineComponent({
     return {
       rows, categories, total, loading, mining, saving, q, category, statusFilter,
       editDialog, edit, editIndex, columns, confColor, statusColor,
-      liveDialog, live, logBox, openLive, stopping, stopMine,
+      liveDialog, live, logBox, openLive, onLiveHide, stopping, stopMine,
       load, openNew, openEdit, goPrev, goNext, acceptNext, acceptDelete, save, setStatus, remove, mine,
     };
   },
