@@ -252,6 +252,91 @@ export async function getMiningStatus() {
   };
 }
 
+// Re-check each provider's model catalog now (also runs every 6h on a schedule, and
+// self-gates to the configured interval unless forced).
+export async function refreshModelCatalog() {
+  const { data } = await axios.post(`${baseUrl}/ai/model-catalog/refresh/`, {});
+  return data as { result: string; checked: string | null };
+}
+
+// ---- Daily helpdesk activity report -------------------------------------------
+// Sends the report now (ignores the schedule). Covers everyone's activity, not just AI.
+export async function sendDailyReportNow() {
+  const { data } = await axios.post(`${baseUrl}/ai/daily-report/send/`, {});
+  return data as { result: string; last_run: string | null };
+}
+
+// ---- AI runtime (the pi package the bridge embeds) ----------------------------
+export interface RuntimeStatus {
+  installed: string | null;
+  installed_error?: string | null;
+  latest: string | null;
+  latest_error?: string | null;
+  update_available: boolean;
+  busy: boolean;
+  busy_detail?: Record<string, unknown>;
+  last_run: string | null;
+  last_result: string;
+  last_version: string;
+}
+
+export async function getRuntimeStatus() {
+  const { data } = await axios.get(`${baseUrl}/ai/runtime/status/`);
+  return data as RuntimeStatus;
+}
+
+// Runs the update immediately (skips the time window only). Still waits for idle,
+// still probes compatibility, still rolls back on failure.
+export async function updateRuntimeNow() {
+  const { data } = await axios.post(`${baseUrl}/ai/runtime/update/`, {});
+  return data as { result: string; last_run: string | null; last_version: string };
+}
+
+// ---- Alert verifiers (deterministic "prove it before you act" rules) ----------
+export interface VerifierRule {
+  index: number;
+  name: string;
+  enabled: boolean;
+  shell: string;
+  identity: string;
+  timeout: number;
+  script_lines: number;
+  problems: string[];
+}
+
+// Report how each helpdesk operation is CLASSIFIED and which surfaces may use it.
+// Runs nothing. An operation the integration declares mutating but leaves unclassified
+// is DENIED once enforcement is on - this surfaces that before it blocks a live feature.
+export async function helpdeskCaps(code?: string) {
+  const { data } = await axios.post(`${baseUrl}/ai/helpdesk-caps/`, code === undefined ? {} : { code });
+  return data as {
+    ok: boolean; error?: string; mode?: string; total?: number;
+    ops: { op: string; mutating: boolean; class: string | null; source: string }[];
+    surfaces?: Record<string, string[]>;
+    unclassified?: string[]; guessed?: string[]; invalid?: string[]; warning?: string;
+  };
+}
+
+// Validate a rule set without running anything (lists parked rules too).
+export async function lintVerifiers(code?: string) {
+  const { data } = await axios.post(`${baseUrl}/ai/verifiers/lint/`, code === undefined ? {} : { code });
+  return data as {
+    ok: boolean; error?: string; note?: string;
+    rules: VerifierRule[]; live?: number; total?: number;
+  };
+}
+
+// Dry-run a rule against one real ticket. Server forces dry_run, so this can never
+// change a ticket - it inspects the device read-only and reports the verdict.
+export async function testVerifier(ticket_ref: string, code?: string) {
+  const { data } = await axios.post(`${baseUrl}/ai/verifiers/test/`, { ticket_ref, ...(code === undefined ? {} : { code }) });
+  return data as {
+    matched: boolean; verifier?: string; host?: string; agent_client?: string;
+    identified_by?: string; action?: string; reason?: string; detail?: string;
+    cancelled?: boolean; noted?: boolean; dry_run?: boolean; error?: string; skipped?: string;
+  };
+}
+
 export async function createDecisionSession(token: string, payload: object = {}) {
   // Mint a stateful, streaming decision-chat session (same machinery as the device chat).
   const { data } = await axios.post(`${baseUrl}/ai/decision/${token}/session/`, payload);

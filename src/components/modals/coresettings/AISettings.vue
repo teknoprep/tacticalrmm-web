@@ -179,6 +179,68 @@
       for Zendesk / Freshdesk / etc. Saved with the main <strong>Save</strong> button.
     </div>
 
+    <div class="row items-center q-gutter-sm q-mb-sm">
+      <q-btn
+        dense
+        no-caps
+        outline
+        color="primary"
+        icon="verified_user"
+        label="Check capabilities"
+        :loading="capsLoading"
+        @click="checkCaps"
+      />
+      <div v-if="caps" class="text-caption">
+        <span :class="caps.mode === 'enforce' ? 'text-green' : 'text-orange'">
+          {{ caps.mode === "enforce" ? "enforcing" : "warn only" }}</span
+        >
+        &mdash; {{ caps.total }} operation(s)
+      </div>
+    </div>
+    <q-banner v-if="capsError" dense class="bg-red-1 text-red-9 q-mb-md">
+      {{ capsError }}
+    </q-banner>
+    <q-banner v-else-if="caps && caps.warning" dense class="bg-orange-1 text-orange-9 q-mb-md">
+      <template #avatar><q-icon name="warning" /></template>
+      {{ caps.warning }}
+      <div class="text-caption q-mt-xs">
+        Add them to <code>exports.opClasses</code> in the code above, e.g.
+        <code>exports.opClasses = { my_op: "create" }</code>. Valid classes: read, create,
+        note, knowledge, customer, close, routing.
+      </div>
+    </q-banner>
+    <div v-if="caps && caps.ops && caps.ops.length" class="q-mb-md">
+      <div class="text-caption text-grey q-mb-xs">
+        What each operation is allowed to do, and where that came from.
+        <strong>declared</strong> = tagged in your code (preferred);
+        <strong>name-guess</strong> = matched a conventional name in product code;
+        <strong>unclassified</strong> = will be denied once enforcing.
+      </div>
+      <div class="row q-gutter-xs">
+        <q-chip
+          v-for="o in caps.ops"
+          :key="o.op"
+          dense
+          size="sm"
+          :color="!o.class ? 'red-2' : o.source === 'declared' ? 'green-2' : 'amber-2'"
+          :title="
+            (o.class || 'unclassified') +
+            ' \u2014 ' +
+            o.source +
+            (o.mutating ? ' \u2014 declared mutating' : '')
+          "
+        >
+          {{ o.op }}<span class="text-grey-8">&nbsp;&middot;&nbsp;{{ o.class || "?" }}</span>
+        </q-chip>
+      </div>
+      <div v-if="caps.surfaces" class="text-caption text-grey q-mt-sm">
+        Visible per surface:
+        <span v-for="(ops, s) in caps.surfaces" :key="s" class="q-mr-sm">
+          {{ s }} <strong>{{ ops.length }}</strong>
+        </span>
+      </div>
+    </div>
+
     <div class="row items-center q-mt-md">
       <div class="text-subtitle2">Ticket Automation (pilot)</div>
       <q-space />
@@ -341,6 +403,537 @@
       The dynamic bits (ticket, resolved context, per‑turn approvals) are added automatically.
       Edit freely &mdash; leave blank to use the built‑in default.
     </div>
+
+    <q-separator class="q-my-md" />
+    <div class="row items-center">
+      <div class="text-subtitle2">Model Catalog Watch</div>
+      <q-space />
+      <q-toggle
+        :model-value="settings.ai_model_catalog_enabled"
+        label="Enabled"
+        @update:model-value="update('ai_model_catalog_enabled', $event)"
+      />
+    </div>
+    <div class="text-caption text-grey q-mb-sm">
+      Providers add and retire models without notice. On a schedule this re-reads what each
+      enabled provider actually offers and compares it with what it saw last time. Newly
+      available models are reported so you can attach them; a model you have
+      <strong>configured</strong> that has disappeared upstream raises a ticket, because every
+      task pointed at it will start failing. The ticket itself is produced by
+      <code>report_model_changes</code> in your helpdesk code &mdash; wording and routing are
+      yours to change without touching the product.
+    </div>
+    <div class="row q-col-gutter-md items-center q-mb-sm">
+      <q-input
+        class="col-4"
+        type="number"
+        dense
+        outlined
+        :model-value="settings.ai_model_catalog_interval_hours"
+        label="Check every (hours)"
+        :disable="!settings.ai_model_catalog_enabled"
+        @update:model-value="update('ai_model_catalog_interval_hours', Number($event))"
+      />
+      <div class="col-auto">
+        <q-btn
+          outline
+          color="primary"
+          icon="sync"
+          label="Check now"
+          :loading="catalogChecking"
+          @click="runCatalogRefresh"
+        />
+      </div>
+      <div class="col text-caption text-grey">
+        <span v-if="settings.ai_model_catalog_checked">
+          Last checked {{ new Date(settings.ai_model_catalog_checked).toLocaleString() }}
+        </span>
+        <span v-else>Never checked &mdash; the first run records a baseline only.</span>
+      </div>
+    </div>
+
+    <div class="row q-col-gutter-md items-center q-mb-sm">
+      <q-toggle
+        class="col-auto"
+        :model-value="settings.ai_model_autoregister"
+        label="Make newly released models usable automatically"
+        @update:model-value="update('ai_model_autoregister', $event)"
+      />
+      <div class="col text-caption text-grey">
+        When a provider starts offering a model the installed AI runtime does not know yet, it
+        is registered with the runtime so it can be selected the same day &mdash; instead of
+        waiting for a runtime upgrade. The model id is verified with the provider first.
+      </div>
+    </div>
+
+    <q-separator class="q-my-md" />
+    <div class="row items-center">
+      <div class="text-subtitle2">Daily Activity Report (email)</div>
+      <q-space />
+      <q-toggle
+        :model-value="settings.ai_daily_report_enabled"
+        label="Enabled"
+        @update:model-value="update('ai_daily_report_enabled', $event)"
+      />
+    </div>
+    <div class="text-caption text-grey q-mb-sm">
+      One email covering <b>everything that happened on the helpdesk</b> in the last N hours &mdash;
+      staff replies and closures, customer replies and the AI's own actions, with a direct link on
+      every ticket. It also calls out tickets <b>no AI touched</b> and anything still unassigned.
+    </div>
+    <div class="row q-col-gutter-md items-start q-mb-sm">
+      <q-input
+        class="col-2"
+        dense
+        outlined
+        mask="##:##"
+        hint="Send time (server time)"
+        :model-value="settings.ai_daily_report_time"
+        label="Send at"
+        :disable="!settings.ai_daily_report_enabled"
+        @update:model-value="update('ai_daily_report_time', $event)"
+      />
+      <q-input
+        class="col-2"
+        type="number"
+        dense
+        outlined
+        hint="How far back to look"
+        :model-value="settings.ai_daily_report_hours"
+        label="Hours covered"
+        :disable="!settings.ai_daily_report_enabled"
+        @update:model-value="update('ai_daily_report_hours', Number($event))"
+      />
+      <q-input
+        class="col-5"
+        dense
+        outlined
+        hint="Comma-separated. Blank = SMTP alert recipients."
+        :model-value="settings.ai_daily_report_recipients"
+        label="Email to"
+        :disable="!settings.ai_daily_report_enabled"
+        @update:model-value="update('ai_daily_report_recipients', $event)"
+      />
+      <div class="col-3">
+        <q-toggle
+          :model-value="settings.ai_daily_report_all_teams"
+          label="All helpdesk teams"
+          :disable="!settings.ai_daily_report_enabled"
+          @update:model-value="update('ai_daily_report_all_teams', $event)"
+        />
+        <div class="text-caption text-grey">Off = only the teams the AI works.</div>
+      </div>
+    </div>
+    <div class="row q-col-gutter-md items-center q-mb-xs">
+      <q-toggle
+        class="col-auto"
+        :model-value="settings.ai_daily_report_ai_summary"
+        label="Open with an AI executive summary"
+        :disable="!settings.ai_daily_report_enabled"
+        @update:model-value="update('ai_daily_report_ai_summary', $event)"
+      />
+      <div class="col text-caption text-grey">
+        The numbers are always computed in code &mdash; the model only interprets them: how the techs
+        are handling tickets, who is doing well, and what to watch in standards and replies. If it
+        fails, the rest of the report still sends.
+      </div>
+    </div>
+    <q-input
+      class="q-mb-sm"
+      dense
+      outlined
+      autogrow
+      type="textarea"
+      input-style="min-height:170px; font-family: monospace; font-size: 12px"
+      label="Executive summary prompt"
+      hint="What the summary should judge and flag. Leave blank to use the built-in default."
+      :model-value="settings.ai_daily_report_prompt"
+      :disable="!settings.ai_daily_report_enabled || !settings.ai_daily_report_ai_summary"
+      @update:model-value="update('ai_daily_report_prompt', $event)"
+    />
+
+    <q-expansion-item
+      dense
+      dense-toggle
+      label="Time-estimation settings (how &quot;time worked&quot; and &quot;time saved&quot; are calculated)"
+      header-class="text-caption text-primary"
+      class="q-mb-sm"
+    >
+      <div class="text-caption text-grey q-mb-sm">
+        These tickets carry no timesheets, so time is derived from the activity log: each person's
+        actions on a ticket are grouped into work sessions and priced. Work done outside the ticket
+        (remote sessions, phone calls) leaves no timestamp, so the result is a <b>floor, not a total</b>
+        &mdash; raise "minutes per action" if a touch really costs your team more.
+      </div>
+      <div class="row q-col-gutter-md items-start">
+        <q-input
+          class="col-2"
+          type="number"
+          dense
+          outlined
+          hint="Gap that starts a new session"
+          :model-value="settings.ai_report_session_gap_minutes"
+          label="Session gap (min)"
+          @update:model-value="update('ai_report_session_gap_minutes', Number($event))"
+        />
+        <q-input
+          class="col-2"
+          type="number"
+          dense
+          outlined
+          hint="Cost of one reply / note"
+          :model-value="settings.ai_report_minutes_per_message"
+          label="Minutes per action"
+          @update:model-value="update('ai_report_minutes_per_message', Number($event))"
+        />
+        <q-input
+          class="col-2"
+          type="number"
+          dense
+          outlined
+          hint="Floor per session"
+          :model-value="settings.ai_report_min_session_minutes"
+          label="Min session (min)"
+          @update:model-value="update('ai_report_min_session_minutes', Number($event))"
+        />
+        <q-input
+          class="col-2"
+          type="number"
+          dense
+          outlined
+          hint="Cap: idle gaps are never billed"
+          :model-value="settings.ai_report_max_session_minutes"
+          label="Max session (min)"
+          @update:model-value="update('ai_report_max_session_minutes', Number($event))"
+        />
+        <q-input
+          class="col-2"
+          type="number"
+          dense
+          outlined
+          hint="History used to learn human times"
+          :model-value="settings.ai_report_baseline_days"
+          label="Baseline (days)"
+          @update:model-value="update('ai_report_baseline_days', Number($event))"
+        />
+      </div>
+      <q-input
+        class="q-mt-sm"
+        dense
+        outlined
+        autogrow
+        label="Fallback minutes per ticket type (JSON)"
+        hint="Used only when there is no human-handled sample to learn from."
+        :model-value="settings.ai_report_fallback_minutes"
+        @update:model-value="update('ai_report_fallback_minutes', $event)"
+      />
+    </q-expansion-item>
+    <div class="row q-col-gutter-md items-center q-mb-sm">
+      <div class="col-auto">
+        <q-btn
+          outline
+          color="primary"
+          icon="mail"
+          label="Send now"
+          :loading="reportSending"
+          @click="sendReportNow"
+        />
+        <q-tooltip>Builds and emails the report immediately, ignoring the schedule.</q-tooltip>
+      </div>
+      <div class="col text-caption text-grey">
+        <span v-if="settings.ai_daily_report_last_run">
+          Last sent {{ new Date(settings.ai_daily_report_last_run).toLocaleString() }}
+          <span v-if="settings.ai_daily_report_last_result">
+            &mdash; {{ settings.ai_daily_report_last_result }}
+          </span>
+        </span>
+        <span v-else>Never sent yet.</span>
+      </div>
+    </div>
+
+    <q-separator class="q-my-md" />
+    <div class="row items-center">
+      <div class="text-subtitle2">AI Runtime Updates</div>
+      <q-space />
+      <q-toggle
+        :model-value="settings.ai_runtime_update_enabled"
+        label="Enabled"
+        @update:model-value="update('ai_runtime_update_enabled', $event)"
+      />
+    </div>
+    <div class="text-caption text-grey q-mb-sm">
+      Updating the AI runtime restarts the bridge, which would drop live chats and in-flight
+      background work. So it only runs (1) inside the window you choose here, and (2) once
+      nothing is running &mdash; if the system is busy it keeps waiting and re-checks until the
+      window closes. The new version is checked for compatibility with this deployment before
+      the restart, and is <b>rolled back automatically</b> if it fails that check or if the
+      bridge does not come back healthy.
+    </div>
+    <div class="row q-col-gutter-md items-start q-mb-sm">
+      <q-input
+        class="col-2"
+        dense
+        outlined
+        mask="##:##"
+        hint="Start time (server time)"
+        :model-value="settings.ai_runtime_update_time"
+        label="Window start"
+        :disable="!settings.ai_runtime_update_enabled"
+        @update:model-value="update('ai_runtime_update_time', $event)"
+      />
+      <q-input
+        class="col-2"
+        type="number"
+        dense
+        outlined
+        hint="Keep waiting for idle for this long"
+        :model-value="settings.ai_runtime_update_max_wait_minutes"
+        label="Window length (min)"
+        :disable="!settings.ai_runtime_update_enabled"
+        @update:model-value="update('ai_runtime_update_max_wait_minutes', Number($event))"
+      />
+      <q-input
+        class="col-3"
+        dense
+        outlined
+        hint="Blank = every day. Else weekdays, Mon=0 (e.g. 0,3)"
+        :model-value="settings.ai_runtime_update_days"
+        label="Days"
+        :disable="!settings.ai_runtime_update_enabled"
+        @update:model-value="update('ai_runtime_update_days', $event)"
+      />
+      <q-input
+        class="col-3"
+        dense
+        outlined
+        hint="'latest', or pin a version e.g. 0.82.1"
+        :model-value="settings.ai_runtime_update_target"
+        label="Target version"
+        :disable="!settings.ai_runtime_update_enabled"
+        @update:model-value="update('ai_runtime_update_target', $event)"
+      />
+    </div>
+    <div class="row q-col-gutter-md items-center q-mb-sm">
+      <div class="col-auto">
+        <q-btn
+          outline
+          color="primary"
+          icon="refresh"
+          label="Check version"
+          :loading="runtimeLoading"
+          @click="loadRuntimeStatus"
+        />
+      </div>
+      <div class="col-auto">
+        <q-btn
+          outline
+          color="warning"
+          icon="system_update"
+          label="Update now"
+          :loading="runtimeUpdating"
+          :disable="!runtime?.update_available"
+          @click="runRuntimeUpdate"
+        />
+        <q-tooltip>
+          Ignores the time window. Still refuses while work is in flight, still probes
+          compatibility, still rolls back on failure.
+        </q-tooltip>
+      </div>
+      <div class="col text-caption">
+        <div v-if="runtime">
+          <span class="text-grey">Installed</span>
+          <b>&nbsp;{{ runtime.installed || "unknown" }}</b>
+          <span class="text-grey">&nbsp;&middot; available&nbsp;</span>
+          <b>{{ runtime.latest || "?" }}</b>
+          <q-badge v-if="runtime.update_available" color="orange" class="q-ml-sm">
+            update available
+          </q-badge>
+          <q-badge v-else color="green" class="q-ml-sm">up to date</q-badge>
+          <q-badge v-if="runtime.busy" color="blue-grey" class="q-ml-sm">
+            busy &mdash; would wait
+          </q-badge>
+          <div v-if="runtime.busy && busyReason" class="text-grey">
+            In flight now: {{ busyReason }}
+          </div>
+          <div v-if="runtime.last_run" class="text-grey">
+            Last attempt {{ new Date(runtime.last_run).toLocaleString() }} &mdash;
+            {{ runtime.last_result }}
+          </div>
+          <div v-if="runtime.latest_error" class="text-negative">
+            Could not reach the package registry: {{ runtime.latest_error }}
+          </div>
+        </div>
+        <span v-else class="text-grey">Version status unavailable (is the bridge running?)</span>
+      </div>
+    </div>
+
+    <q-separator class="q-my-md" />
+    <div class="row items-center">
+      <div class="text-subtitle2">Alert Verifiers (prove it before acting)</div>
+      <q-space />
+      <q-toggle
+        :model-value="settings.ai_verifiers_enabled"
+        label="Enabled"
+        @update:model-value="update('ai_verifiers_enabled', $event)"
+      />
+    </div>
+    <div class="text-caption text-grey q-mb-sm">
+      Machine-generated alerts often describe a non-problem &mdash; and just as often hide a real
+      one. Deciding from the alert <em>text</em> is guesswork, so a verifier goes and looks at the
+      device instead: it gathers read-only evidence and rules on it in <strong>code</strong>, never
+      by AI. This runs <em>before</em> the model, so a proven-harmless alert is closed without
+      costing an AI call, and a proven-real one is pinned open so nothing can dismiss it later.
+    </div>
+    <q-toggle
+      :model-value="settings.ai_verifiers_dry_run"
+      label="Dry run (report what it would do, change nothing)"
+      :disable="!settings.ai_verifiers_enabled"
+      @update:model-value="update('ai_verifiers_dry_run', $event)"
+    />
+    <div class="text-caption text-grey q-mb-sm">
+      Leave this <strong>on</strong> for any new rule. It still inspects the device and posts an
+      internal note saying what it <em>would</em> decide, so a rule can be proven safe on real
+      tickets before it is allowed to close anything.
+    </div>
+
+    <div class="text-caption text-weight-medium">Verifier Rules (verifiers.js)</div>
+    <q-input
+      :model-value="settings.ai_verifier_code"
+      type="textarea"
+      outlined
+      input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
+      label="JavaScript defining exports.verifiers = [ ... ]"
+      :disable="!settings.ai_verifiers_enabled"
+      @update:model-value="update('ai_verifier_code', $event)"
+    />
+    <div class="text-caption text-grey q-mb-sm">
+      Each rule declares: <code>name</code>, <code>match(ticket)</code> (which alerts it owns),
+      <code>host(ticket)</code> (which machine holds the truth), <code>script</code> (read-only
+      evidence to gather), and <code>verdict(evidence)</code> returning
+      <code>noise</code> / <code>actionable</code> / <code>human</code>. Optional:
+      <code>enabled:false</code> to park a rule, <code>shell</code>
+      (<code>/bin/bash</code>&nbsp;|&nbsp;<code>powershell</code>&nbsp;|&nbsp;<code>cmd</code>),
+      <code>identity</code> (how that kind of box states its own FQDN), <code>timeout</code>.
+      Adding a new alert type is a rule here &mdash; no code change. Saved with
+      <strong>Save</strong>.
+    </div>
+
+    <div class="row q-col-gutter-sm items-start q-mb-sm">
+      <div class="col-auto">
+        <q-btn
+          outline
+          color="primary"
+          icon="rule"
+          label="Check rules"
+          :loading="verifierLinting"
+          :disable="!settings.ai_verifiers_enabled"
+          @click="checkVerifiers"
+        />
+      </div>
+      <div class="col">
+        <q-input
+          v-model="verifierTestRef"
+          dense
+          outlined
+          label="Test on a real ticket (e.g. TICKET/12345)"
+          :disable="!settings.ai_verifiers_enabled"
+          @keyup.enter="runVerifierTest"
+        />
+      </div>
+      <div class="col-auto">
+        <q-btn
+          outline
+          color="secondary"
+          icon="biotech"
+          label="Dry-run test"
+          :loading="verifierTesting"
+          :disable="!settings.ai_verifiers_enabled"
+          @click="runVerifierTest"
+        />
+        <q-tooltip>
+          Inspects the device read-only and shows the verdict. Always a dry run &mdash; a test can
+          never change a ticket.
+        </q-tooltip>
+      </div>
+    </div>
+
+    <q-banner v-if="verifierLintError" dense class="bg-orange-1 text-orange-10 q-mb-sm">
+      <template #avatar><q-icon name="warning" /></template>
+      {{ verifierLintError }}
+    </q-banner>
+
+    <q-markup-table v-if="verifierRules.length" flat bordered dense class="q-mb-sm">
+      <thead>
+        <tr>
+          <th class="text-left">Rule</th>
+          <th class="text-left">State</th>
+          <th class="text-left">Shell</th>
+          <th class="text-left">Evidence</th>
+          <th class="text-left">Problems</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="r in verifierRules" :key="r.index">
+          <td class="text-left">{{ r.name }}</td>
+          <td class="text-left">
+            <q-badge :color="r.enabled ? 'positive' : 'grey-6'">
+              {{ r.enabled ? "in service" : "parked" }}
+            </q-badge>
+          </td>
+          <td class="text-left"><code>{{ r.shell }}</code></td>
+          <td class="text-left">{{ r.script_lines }} lines, {{ r.timeout }}s</td>
+          <td class="text-left">
+            <span v-if="!r.problems.length" class="text-positive">&mdash;</span>
+            <span v-else class="text-negative">{{ r.problems.join("; ") }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </q-markup-table>
+
+    <q-card v-if="verifierTestResult" flat bordered class="q-mb-md">
+      <q-card-section class="q-pb-xs">
+        <div v-if="verifierTestResult.error" class="text-negative">
+          {{ verifierTestResult.error }}
+        </div>
+        <div v-else-if="!verifierTestResult.matched" class="text-grey-8">
+          No rule claimed this ticket &mdash; it would go through normal triage untouched.
+        </div>
+        <div v-else>
+          <div class="row items-center q-gutter-sm">
+            <q-badge :color="verdictColor(verifierTestResult.action)">
+              {{ verdictText(verifierTestResult.action) }}
+            </q-badge>
+            <span class="text-caption text-grey-8">{{ verifierTestResult.verifier }}</span>
+            <q-badge outline color="grey-7">dry run &mdash; nothing changed</q-badge>
+          </div>
+          <div class="text-caption q-mt-sm">
+            <div v-if="verifierTestResult.host">
+              <b>Host inspected:</b> <code>{{ verifierTestResult.host }}</code>
+              <span v-if="verifierTestResult.agent_client">
+                &mdash; proven to belong to <b>{{ verifierTestResult.agent_client }}</b>
+              </span>
+              <q-badge
+                v-if="verifierTestResult.identified_by === 'fqdn_probe'"
+                outline
+                color="primary"
+                class="q-ml-xs"
+              >
+                identified by asking the box its own FQDN
+              </q-badge>
+            </div>
+            <div v-if="verifierTestResult.reason" class="q-mt-xs">
+              <b>Why:</b> {{ verifierTestResult.reason }}
+            </div>
+          </div>
+          <pre
+            v-if="verifierTestResult.detail"
+            class="q-mt-sm q-pa-sm bg-grey-2"
+            style="white-space: pre-wrap; font-size: 11px; max-height: 260px; overflow: auto"
+            >{{ verifierTestResult.detail }}</pre
+          >
+        </div>
+      </q-card-section>
+    </q-card>
 
     <q-separator class="q-my-md" />
     <div class="text-subtitle2 q-mb-xs">AI Procedures (knowledge mining)</div>
@@ -592,6 +1185,13 @@ import {
   deleteAIModel,
   fetchAvailableAIModels,
   helpdeskAssist,
+  helpdeskCaps,
+  lintVerifiers,
+  testVerifier,
+  refreshModelCatalog,
+  getRuntimeStatus,
+  updateRuntimeNow,
+  sendDailyReportNow,
 } from "@/api/core";
 import { notifySuccess, notifyError } from "@/utils/notify";
 import { renderMarkdown } from "@/utils/markdown";
@@ -605,6 +1205,152 @@ export default {
   setup(props, { emit }) {
     const apiKeyPlaceholder = "{{HELPDESK_API_KEY}}";
     const providers = ref([]);
+
+    // ---- Model catalog watch ----
+    // Providers add and retire models without warning. A retired model we still have
+    // configured is an outage in waiting, so it is worth a ticket rather than a surprise.
+    const catalogChecking = ref(false);
+    async function runCatalogRefresh() {
+      catalogChecking.value = true;
+      try {
+        const r = await refreshModelCatalog();
+        // The run stamps a new "last checked" time server-side; without applying it here
+        // the caption keeps showing whatever was loaded when this dialog opened, which
+        // reads exactly like "Check now does nothing".
+        if (r.checked) update("ai_model_catalog_checked", r.checked);
+        notifySuccess(r.result || "checked");
+      } catch (e) {
+        notifyError(e?.response?.data?.error || String(e));
+      }
+      catalogChecking.value = false;
+    }
+
+    // ---- Daily activity report ----
+    const reportSending = ref(false);
+    async function sendReportNow() {
+      reportSending.value = true;
+      try {
+        const r = await sendDailyReportNow();
+        notifySuccess(r.result || "sent", 8000);
+        if (r.last_run) update("ai_daily_report_last_run", r.last_run);
+      } catch (e) {
+        notifyError(e?.response?.data?.error || String(e));
+      }
+      reportSending.value = false;
+    }
+
+    // ---- AI runtime updates (scheduled, only when idle) ----
+    const runtime = ref(null);
+    const runtimeLoading = ref(false);
+    const runtimeUpdating = ref(false);
+    async function loadRuntimeStatus() {
+      runtimeLoading.value = true;
+      try {
+        runtime.value = await getRuntimeStatus();
+      } catch (e) {
+        runtime.value = null;
+      }
+      runtimeLoading.value = false;
+    }
+    async function runRuntimeUpdate() {
+      runtimeUpdating.value = true;
+      try {
+        const r = await updateRuntimeNow();
+        notifySuccess(r.result || "done", 8000);
+        await loadRuntimeStatus();
+      } catch (e) {
+        notifyError(e?.response?.data?.error || String(e));
+      }
+      runtimeUpdating.value = false;
+    }
+    const busyReason = computed(() => {
+      const d = runtime.value?.busy_detail || {};
+      const parts = [];
+      if (d.active_sessions) parts.push(`${d.active_sessions} live chat(s)`);
+      if (d.active_runs) parts.push(`${d.active_runs} background run(s)`);
+      if (d.running_task_runs) parts.push(`${d.running_task_runs} task run(s)`);
+      if (d.triaging_tickets) parts.push(`${d.triaging_tickets} ticket(s) being triaged`);
+      if (d.mining) parts.push("knowledge mining");
+      if (d.bridge) parts.push(d.bridge);
+      return parts.join(", ");
+    });
+
+    // ---- Alert verifiers: author rules safely from here ----
+    // Rules decide, in code, whether a machine-generated alert is real - by reading the
+    // device. Authoring blind is the thing that makes a code box unusable, so the UI can
+    // (a) validate a rule set without running it and (b) dry-run it against a real ticket.
+    const verifierRules = ref([]);
+    const verifierLintError = ref("");
+    const verifierLinting = ref(false);
+    const verifierTestRef = ref("");
+    const verifierTestResult = ref(null);
+    const verifierTesting = ref(false);
+
+    // Capability tags. An operation the integration declares mutating but leaves
+    // unclassified is DENIED once enforcement is on; this shows that before it bites.
+    const caps = ref(null);
+    const capsError = ref("");
+    const capsLoading = ref(false);
+
+    async function checkCaps() {
+      capsLoading.value = true;
+      capsError.value = "";
+      try {
+        const r = await helpdeskCaps(props.settings.ai_helpdesk_code || "");
+        if (!r.ok) {
+          caps.value = null;
+          capsError.value = r.error || "could not read capability tags";
+        } else {
+          caps.value = r;
+          if (r.warning) notifyError(r.warning);
+          else notifySuccess(`${r.total} operation(s) classified, none unclassified`);
+        }
+      } catch (e) {
+        capsError.value = e?.response?.data?.error || String(e);
+      }
+      capsLoading.value = false;
+    }
+
+    async function checkVerifiers() {
+      verifierLinting.value = true;
+      verifierLintError.value = "";
+      try {
+        const r = await lintVerifiers(props.settings.ai_verifier_code || "");
+        verifierRules.value = r.rules || [];
+        if (!r.ok) verifierLintError.value = r.error || "rule set is not valid";
+        else if (!verifierRules.value.length) verifierLintError.value = r.note || "No rules defined.";
+        else notifySuccess(`${r.live} of ${r.total} rule(s) in service`);
+      } catch (e) {
+        verifierLintError.value = e?.response?.data?.error || String(e);
+      }
+      verifierLinting.value = false;
+    }
+
+    async function runVerifierTest() {
+      const ref_ = (verifierTestRef.value || "").trim();
+      if (!ref_) {
+        notifyError("Enter a ticket reference to test against");
+        return;
+      }
+      verifierTesting.value = true;
+      verifierTestResult.value = null;
+      try {
+        // Server hard-forces dry-run, so a test can never change the ticket.
+        verifierTestResult.value = await testVerifier(ref_, props.settings.ai_verifier_code || "");
+      } catch (e) {
+        verifierTestResult.value = { matched: false, error: e?.response?.data?.error || String(e) };
+      }
+      verifierTesting.value = false;
+    }
+
+    const verdictColor = (a) =>
+      ({ noise: "positive", actionable: "warning", human: "grey-7" })[a] || "grey-7";
+    const verdictText = (a) =>
+      ({
+        noise: "No action needed (proven)",
+        actionable: "Real problem (proven)",
+        human: "Needs a human",
+      })[a] || a;
 
     // ---- AI helpdesk-setup assistant ----
     const assistDialog = ref(false);
@@ -888,10 +1634,35 @@ export default {
     }
 
     onMounted(loadAll);
+    onMounted(loadRuntimeStatus);
 
     return {
       apiKeyPlaceholder,
       renderMarkdown,
+      catalogChecking,
+      runCatalogRefresh,
+      reportSending,
+      sendReportNow,
+      runtime,
+      runtimeLoading,
+      runtimeUpdating,
+      loadRuntimeStatus,
+      runRuntimeUpdate,
+      busyReason,
+      caps,
+      capsError,
+      capsLoading,
+      checkCaps,
+      verifierRules,
+      verifierLintError,
+      verifierLinting,
+      verifierTestRef,
+      verifierTestResult,
+      verifierTesting,
+      checkVerifiers,
+      runVerifierTest,
+      verdictColor,
+      verdictText,
       assistDialog,
       assistMessages,
       assistInput,
