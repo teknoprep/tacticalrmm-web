@@ -157,6 +157,16 @@
                 v-model="localRole.can_use_ai_autoapprove"
                 label="Allow auto-approve of device actions"
               />
+              <q-checkbox
+                v-model="localRole.can_manage_all_ai_tasks"
+                label="Manage/delete all AI tasks & bulk commands (any owner)"
+              >
+                <q-tooltip>
+                  Allows editing/deleting scheduled AI tasks and bulk AI commands
+                  created by OTHER users, including on agents outside this role's
+                  normal scope. Superusers always have this.
+                </q-tooltip>
+              </q-checkbox>
             </div>
             <q-select
               v-model="localRole.ai_allowed_models"
@@ -529,6 +539,7 @@ export default {
           can_use_ai: false,
           can_use_ai_mutate: false,
           can_use_ai_autoapprove: false,
+          can_manage_all_ai_tasks: false,
           ai_allowed_models: [],
           can_uninstall_agents: false,
           can_update_agents: false,

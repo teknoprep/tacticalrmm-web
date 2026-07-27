@@ -42,7 +42,7 @@
         <template #prepend><q-icon name="search" /></template>
       </q-input>
       <q-table
-        :rows="tasks"
+        :rows="mergedRows"
         :columns="columns"
         row-key="id"
         dense
@@ -58,28 +58,44 @@
             <q-icon name="dns" size="xs" class="q-mr-xs" />{{ props.row.hostname }}
           </q-td>
         </template>
+        <template #body-cell-name="props">
+          <q-td :props="props">
+            <template v-if="props.row._kind === 'created'">
+              <q-icon name="smart_toy" size="xs" color="deep-purple" class="q-mr-xs" />
+              <a class="pi-created-link" @click="viewCreated(props.row)">{{ truncate(props.row.name, 60) }}</a>
+              <q-badge color="deep-purple" outline class="q-ml-xs" label="AI" />
+              <q-tooltip>{{ props.row.name }}</q-tooltip>
+            </template>
+            <template v-else>{{ props.row.name }}</template>
+          </q-td>
+        </template>
         <template #body-cell-by="props">
           <q-td :props="props">
-            {{ props.row.modified_by || props.row.created_by || "—" }}
-            <q-tooltip v-if="props.row.created_by || props.row.modified_by">
-              Created by {{ props.row.created_by || "unknown" }}<span
-                v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
-              >
-                &middot; Last edited by {{ props.row.modified_by }}</span
-              >
-            </q-tooltip>
+            <template v-if="props.row._kind === 'created'">Pi (AI)</template>
+            <template v-else>
+              {{ props.row.modified_by || props.row.created_by || "—" }}
+              <q-tooltip v-if="props.row.created_by || props.row.modified_by">
+                Created by {{ props.row.created_by || "unknown" }}<span
+                  v-if="props.row.modified_by && props.row.modified_by !== props.row.created_by"
+                >
+                  &middot; Last edited by {{ props.row.modified_by }}</span
+                >
+              </q-tooltip>
+            </template>
           </q-td>
         </template>
         <template #body-cell-enabled="props">
           <q-td :props="props">
             <q-icon
+              v-if="props.row._kind !== 'created'"
               :name="props.row.enabled ? 'check_circle' : 'pause_circle'"
               :color="props.row.enabled ? 'green' : 'grey'"
             />
+            <span v-else class="text-grey">—</span>
           </q-td>
         </template>
         <template #body-cell-schedule="props">
-          <q-td :props="props">{{ scheduleText(props.row) }}</q-td>
+          <q-td :props="props">{{ props.row._kind === 'created' ? ('Once · ' + formatTime(props.row.run_at)) : scheduleText(props.row) }}</q-td>
         </template>
         <template #body-cell-last_status="props">
           <q-td :props="props">
@@ -102,61 +118,84 @@
         </template>
         <template #body-cell-actions="props">
           <q-td :props="props">
-            <q-btn
-              dense
-              flat
-              size="sm"
-              icon="play_arrow"
-              color="primary"
-              @click="runNow(props.row)"
-            >
-              <q-tooltip>Run now</q-tooltip>
-            </q-btn>
-            <q-btn
-              v-if="runningTasks[props.row.id]"
-              dense
-              flat
-              size="sm"
-              icon="sensors"
-              color="red"
-              class="pi-live-pulse"
-              @click="openLive(runningTasks[props.row.id])"
-            >
-              <q-tooltip>Live — trace what it's doing now</q-tooltip>
-            </q-btn>
-            <q-btn dense flat size="sm" icon="history" @click="openHistory(props.row)">
-              <q-tooltip>View run history</q-tooltip>
-            </q-btn>
-            <q-btn
-              v-if="mode === 'agent'"
-              dense
-              flat
-              size="sm"
-              icon="edit"
-              @click="editTask(props.row)"
-            />
-            <q-btn
-              v-if="mode === 'agent'"
-              dense
-              flat
-              size="sm"
-              icon="delete"
-              color="red"
-              @click="remove(props.row)"
-            />
+            <template v-if="props.row._kind === 'created'">
+              <q-btn dense flat size="sm" icon="open_in_full" @click="viewCreated(props.row)">
+                <q-tooltip>View details</q-tooltip>
+              </q-btn>
+              <q-btn
+                v-if="props.row.status === 'scheduled'"
+                dense flat size="sm" icon="delete" color="red"
+                @click="cancelAiCreated(props.row)"
+              >
+                <q-tooltip>Cancel this AI-scheduled action</q-tooltip>
+              </q-btn>
+            </template>
+            <template v-else>
+              <q-btn dense flat size="sm" icon="play_arrow" color="primary" @click="runNow(props.row)">
+                <q-tooltip>Run now</q-tooltip>
+              </q-btn>
+              <q-btn
+                v-if="runningTasks[props.row.id]"
+                dense flat size="sm" icon="sensors" color="red" class="pi-live-pulse"
+                @click="openLive(runningTasks[props.row.id])"
+              >
+                <q-tooltip>Live — trace what it's doing now</q-tooltip>
+              </q-btn>
+              <q-btn dense flat size="sm" icon="history" @click="openHistory(props.row)">
+                <q-tooltip>View run history</q-tooltip>
+              </q-btn>
+              <q-btn v-if="mode === 'agent'" dense flat size="sm" icon="edit" @click="editTask(props.row)" />
+              <q-btn v-if="mode === 'agent'" dense flat size="sm" icon="delete" color="red" @click="remove(props.row)" />
+            </template>
           </q-td>
         </template>
       </q-table>
-      <div v-if="tasks.length === 0" class="q-pa-md text-grey">
+      <div v-if="mergedRows.length === 0" class="q-pa-md text-grey">
         <template v-if="mode === 'agent'">
-          No scheduled AI tasks yet. Create one to have Pi periodically check this
-          device and raise an alert if it finds a problem.
+          No AI tasks yet. Create one to have Pi periodically check this device — or Pi
+          will add its own scheduled actions here while working this device's tickets.
         </template>
         <template v-else>
           No AI tasks configured for any device in this {{ scope.kind }}.
         </template>
       </div>
     </div>
+
+    <!-- AI-created scheduled action: details -->
+    <q-dialog v-model="createdDialog">
+      <q-card style="min-width: 520px; max-width: 92vw">
+        <q-card-section class="row items-center">
+          <q-icon name="smart_toy" color="deep-purple" class="q-mr-sm" />
+          <div class="text-subtitle1">AI-created scheduled action</div>
+          <q-space />
+          <q-btn dense flat icon="close" v-close-popup />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="q-gutter-sm">
+          <div><span class="text-grey">Ticket:</span> {{ createdDetail.ticket_ref || "—" }}</div>
+          <div><span class="text-grey">Runs:</span> once · {{ formatTime(createdDetail.run_at) }}</div>
+          <div class="row items-center">
+            <span class="text-grey q-mr-sm">Status:</span>
+            <q-badge :color="statusColor(createdDetail.status)" :label="createdDetail.status" />
+          </div>
+          <div><span class="text-grey">Makes changes:</span> {{ createdDetail.allow_mutating ? "Yes" : "No (read-only)" }}</div>
+          <div class="text-grey q-mt-sm">Action</div>
+          <div class="pi-created-action">{{ createdDetail.action }}</div>
+          <template v-if="createdDetail.result">
+            <div class="text-grey q-mt-sm">Result</div>
+            <div class="pi-created-action">{{ createdDetail.result }}</div>
+          </template>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            v-if="createdDetail.status === 'scheduled'"
+            flat color="red" icon="delete" label="Cancel action"
+            @click="cancelAiCreated(createdDetail)"
+          />
+          <q-btn flat label="Close" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <!-- edit dialog -->
     <q-dialog v-model="dialog">
@@ -166,6 +205,20 @@
         </q-card-section>
         <q-card-section class="q-gutter-sm scroll" style="max-height: 70vh">
           <q-input v-model="form.name" outlined dense label="Task name" />
+          <div class="row items-center">
+            <q-space />
+            <q-btn
+              dense
+              no-caps
+              size="sm"
+              color="deep-purple"
+              icon="auto_awesome"
+              label="Help me write this with AI"
+              @click="openAssist"
+            >
+              <q-tooltip>Interview me and draft the prompt</q-tooltip>
+            </q-btn>
+          </div>
           <q-input
             v-model="form.prompt"
             outlined
@@ -175,6 +228,71 @@
             label="Prompt / instructions"
             hint="e.g. Check SQL Server performance. Alert on high wait times or latency over 1s, warn over 500ms."
           />
+
+          <q-dialog v-model="assistDialog">
+            <q-card style="min-width: 720px; max-width: 92vw">
+              <q-card-section class="row items-center">
+                <div class="text-subtitle1">AI Task Prompt Builder</div>
+                <q-space />
+                <q-btn dense flat icon="close" v-close-popup />
+              </q-card-section>
+              <q-separator />
+              <q-card-section style="max-height: 55vh; overflow-y: auto">
+                <div
+                  v-if="assistMessages.length === 0"
+                  class="text-grey text-caption q-mb-sm"
+                >
+                  Tell the AI what you want this task to check or do on the device. It will
+                  interview you, then draft the <strong>Prompt</strong> for you to review and
+                  apply. Click <strong>Send</strong> to start.
+                </div>
+                <div v-for="(m, i) in assistMessages" :key="i">
+                  <q-chat-message
+                    :sent="m.role === 'user'"
+                    :bg-color="m.role === 'user' ? 'blue-2' : 'grey-3'"
+                  >
+                    <div v-if="m.role === 'user'" style="white-space:pre-wrap">{{ m.text }}</div>
+                    <div v-else class="md-body" v-html="renderMarkdown(m.text)"></div>
+                  </q-chat-message>
+                  <div v-if="m.prompt" class="q-gutter-xs q-mb-md">
+                    <q-btn
+                      dense
+                      no-caps
+                      size="sm"
+                      color="primary"
+                      icon="check"
+                      label="Apply to Prompt"
+                      @click="applyAssistPrompt(m.prompt)"
+                    />
+                  </div>
+                </div>
+                <div v-if="assistLoading" class="text-grey text-caption">
+                  <q-spinner-dots size="1.5em" /> thinking…
+                </div>
+              </q-card-section>
+              <q-separator />
+              <q-card-section class="row q-gutter-sm items-center">
+                <q-input
+                  v-model="assistInput"
+                  outlined
+                  dense
+                  autogrow
+                  class="col"
+                  type="textarea"
+                  input-style="max-height: 120px"
+                  placeholder="Answer the AI, or describe what you want… (Enter to send)"
+                  @keydown.enter.exact.prevent="sendAssist"
+                />
+                <q-btn
+                  color="primary"
+                  icon="send"
+                  :loading="assistLoading"
+                  :disable="assistLoading"
+                  @click="sendAssist"
+                />
+              </q-card-section>
+            </q-card>
+          </q-dialog>
           <q-select
             v-model="form.model"
             :options="modelOptions"
@@ -442,8 +560,12 @@ import {
   fetchAIModels,
   fetchAITaskRuns,
   fetchAITaskRunLive,
+  aiPromptAssist,
+  getScheduledActions,
+  deleteScheduledAction,
 } from "@/api/core";
 import { runPiChat } from "@/api/agents";
+import { renderMarkdown } from "@/utils/markdown";
 import { notifySuccess, notifyError } from "@/utils/notify";
 
 export default {
@@ -454,6 +576,18 @@ export default {
     const selectedTree = computed(() => store.state.selectedTree);
     const tabHeight = computed(() => store.state.tabHeight);
     const tasks = ref([]);
+    // AI-created scheduled actions (queued by Pi in ticket chats) for this device.
+    const aiCreated = ref([]);
+    async function cancelAiCreated(row) {
+      try {
+        await deleteScheduledAction(row._actionId || row.id);
+        notifySuccess("Scheduled action cancelled");
+        createdDialog.value = false;
+        await load();
+      } catch (e) {
+        notifyError("Failed to cancel");
+      }
+    }
     const modelOptions = ref([]);
     const runningTasks = ref({});
     const filter = ref("");
@@ -484,6 +618,30 @@ export default {
       const base = parseInt(tabHeight.value) || 300;
       return `${mode.value === "scope" ? base - 60 : base}px`;
     });
+    // AI-created scheduled actions are merged INTO the tasks table as rows (tagged _kind).
+    const mergedRows = computed(() => {
+      const created = aiCreated.value.map((r) => ({
+        ...r,
+        _kind: "created",
+        id: "ai-" + r.id,
+        _actionId: r.id,
+        name: r.action,
+        last_status: r.status,
+        last_status_rank: 5,
+        last_run: formatTime(r.run_at),
+      }));
+      return [...tasks.value, ...created];
+    });
+    const createdDialog = ref(false);
+    const createdDetail = ref({});
+    function viewCreated(row) {
+      createdDetail.value = row;
+      createdDialog.value = true;
+    }
+    function truncate(s, n) {
+      s = s || "";
+      return s.length > n ? s.slice(0, n) + "\u2026" : s;
+    }
 
     const columns = computed(() => {
       const cols = [];
@@ -533,7 +691,10 @@ export default {
       return `Every ${row.interval_minutes} min`;
     }
     function statusColor(s) {
-      return { ok: "green", warning: "orange", alert: "red", error: "grey", running: "blue" }[s] || "grey";
+      return {
+        ok: "green", warning: "orange", alert: "red", error: "grey", running: "blue",
+        scheduled: "blue-grey", done: "green", cancelled: "grey",
+      }[s] || "grey";
     }
     function formatTime(ts) {
       if (!ts) return "";
@@ -544,6 +705,7 @@ export default {
       }
     }
 
+    // eslint-disable-next-line no-use-before-define
     async function load() {
       try {
         let data = [];
@@ -555,6 +717,17 @@ export default {
         }));
       } catch (e) {
         tasks.value = [];
+      }
+      // AI-created scheduled actions for THIS device (agent mode only).
+      if (mode.value === "agent") {
+        try {
+          const acts = await getScheduledActions();
+          aiCreated.value = (acts || []).filter((a) => a.agent_id === selectedAgent.value);
+        } catch (e) {
+          aiCreated.value = [];
+        }
+      } else {
+        aiCreated.value = [];
       }
     }
     async function loadModels() {
@@ -731,13 +904,83 @@ export default {
     });
     onBeforeUnmount(stopLivePoll);
 
+    // ---- AI prompt-writing assistant ----
+    const assistDialog = ref(false);
+    const assistMessages = ref([]);
+    const assistInput = ref("");
+    const assistLoading = ref(false);
+    function openAssist() {
+      assistDialog.value = true;
+    }
+    function parseTaskProposal(reply) {
+      const i = reply.indexOf("===PROMPT START===");
+      let prompt = null;
+      if (i >= 0) {
+        const j = reply.indexOf("===PROMPT END===", i);
+        if (j >= 0) prompt = reply.slice(i + "===PROMPT START===".length, j).trim();
+      }
+      let text = reply.replace(/===PROMPT START===[\s\S]*?===PROMPT END===/g, "").trim();
+      if (!text) text = prompt ? "(proposed prompt below — review and apply)" : "";
+      return { text, prompt };
+    }
+    async function sendAssist() {
+      if (assistLoading.value) return;
+      const content =
+        assistInput.value.trim() ||
+        (assistMessages.value.length === 0
+          ? "Help me write an AI task. " +
+            (form.value.prompt ? "Here is my current draft: " + form.value.prompt : "")
+          : "");
+      if (!content) return;
+      assistMessages.value.push({ role: "user", text: content, raw: content });
+      assistInput.value = "";
+      assistLoading.value = true;
+      try {
+        const convo = assistMessages.value.map((m) => ({ role: m.role, content: m.raw || m.text }));
+        const { reply } = await aiPromptAssist({
+          messages: convo,
+          kind: "single",
+          current_prompt: form.value.prompt || "",
+        });
+        const parsed = parseTaskProposal(reply || "");
+        assistMessages.value.push({
+          role: "assistant",
+          text: parsed.text || reply || "(no response)",
+          raw: reply,
+          prompt: parsed.prompt,
+        });
+      } catch (e) {
+        notifyError("Assistant request failed");
+      } finally {
+        assistLoading.value = false;
+      }
+    }
+    function applyAssistPrompt(p) {
+      form.value.prompt = p;
+      notifySuccess("Applied to the Prompt field");
+    }
+
     return {
+      renderMarkdown,
+      assistDialog,
+      assistMessages,
+      assistInput,
+      assistLoading,
+      openAssist,
+      sendAssist,
+      applyAssistPrompt,
       mode,
       scope,
       headerText,
       tableHeight,
       tabHeight,
       tasks,
+      mergedRows,
+      cancelAiCreated,
+      createdDialog,
+      createdDetail,
+      viewCreated,
+      truncate,
       modelOptions,
       runningTasks,
       filter,
@@ -829,6 +1072,20 @@ export default {
 }
 .pi-say {
   white-space: pre-wrap;
+}
+.pi-created-link {
+  color: #7e57c2;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.pi-created-action {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 8px;
+  border-radius: 4px;
 }
 .pi-live-ev {
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);

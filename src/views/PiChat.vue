@@ -13,6 +13,7 @@
       </div>
       <q-space />
       <q-btn
+        v-if="!isDecision"
         flat
         dense
         no-caps
@@ -49,7 +50,19 @@
         class="q-mr-sm"
         @update:model-value="sendAutoApprove"
       />
+      <q-toggle
+        v-if="isDecision"
+        v-model="allowEmail"
+        dense
+        color="teal"
+        label="Allow customer email"
+        class="q-mr-sm"
+        @update:model-value="sendAllowEmail"
+      >
+        <q-tooltip>Let Pi send replies to the customer on this ticket. Off = drafts only.</q-tooltip>
+      </q-toggle>
       <q-btn
+        v-if="!isDecision"
         flat
         dense
         no-caps
@@ -64,24 +77,27 @@
         :model-value="!readOnly"
         dense
         color="deep-orange"
-        :label="readOnly ? 'Read-only' : 'Write mode'"
+        :label="readOnly ? 'Read-only (devices)' : 'Write mode (devices)'"
         class="q-mr-sm"
         @update:model-value="(v) => setReadonly(!v)"
       >
         <q-tooltip>
-          Read-only gathers info and proposes fixes without changing anything.
-          Switch to Write mode to let Pi apply changes.
+          Read-only gathers info and proposes fixes without changing the DEVICES in
+          this session. Switch to Write mode to let Pi apply changes on the machines.
+          Ticket actions (reply to the customer, internal note, create a ticket, KB)
+          do not need Write mode — they are approved per call.
         </q-tooltip>
       </q-toggle>
       <q-badge
         v-else-if="readOnly"
         color="blue-grey"
-        label="read-only"
+        label="read-only (devices)"
         class="q-mr-sm"
       >
         <q-tooltip>
-          This session can only inspect devices. Changes require an account with
-          AI write (mutate) rights.
+          This session can only inspect devices. DEVICE changes require an account
+          with AI write (mutate) rights. Ticket actions (reply, note, create, KB) are
+          unaffected and still available, with approval.
         </q-tooltip>
       </q-badge>
       <q-badge
@@ -304,11 +320,12 @@ import { useRoute, useRouter } from "vue-router";
 import { getBaseUrl } from "@/boot/axios";
 import {
   createPiSession,
+  saveAIAutoApprove,
   createPiMultiSession,
   decodePiMachines,
   encodePiMachines,
 } from "@/api/agents";
-import { fetchAITaskRunLive } from "@/api/core";
+import { fetchAITaskRunLive, createDecisionSession } from "@/api/core";
 import { useAgentDropdown } from "@/composables/agents";
 import { notifyError } from "@/utils/notify";
 import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
@@ -319,6 +336,10 @@ export default {
   setup() {
     const route = useRoute();
     const router = useRouter();
+    // Decision (ticket) chat reuses this exact component; it just mints its session
+    // from the decision endpoint instead of an agent.
+    const decisionToken = route.params.token || null;
+    const isDecision = !!decisionToken;
     const agentId = route.params.agent_id;
     const isMulti = agentId === "multi";
 
@@ -343,6 +364,10 @@ export default {
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
     const readOnly = ref(false);
+    const allowEmail = ref(true);
+    function sendAllowEmail(val) {
+      if (ws && connected.value) ws.send(JSON.stringify({ type: "set_allow_email", value: !!val }));
+    }
     const mutateAllowed = ref(false);
     const resolveRun = route.query.resolve_run || null;
     let resolveSeeded = false;
@@ -522,7 +547,9 @@ export default {
         try { ws.close(); } catch (e) { /* noop */ }
         ws = null;
       }
-      const create = isMulti
+      const create = isDecision
+        ? createDecisionSession(decisionToken, { ...(model_id ? { model_id } : {}) })
+        : isMulti
         ? createPiMultiSession({
             machines: multiMachines,
             ...(model_id ? { model_id } : {}),
@@ -543,6 +570,9 @@ export default {
           }));
           selectedModel.value = data.model_id;
           autoapproveAllowed.value = !!data.autoapprove_allowed;
+          // The server remembers the operator's Auto-approve choice; render THAT rather
+          // than defaulting to off, or a refresh looks like the setting silently died.
+          if (data.auto_approve !== undefined) autoApprove.value = !!data.auto_approve;
 
           const url = `${wsBase()}/pi/ws/${data.token}/`;
           ws = new WebSocket(url);
@@ -570,22 +600,55 @@ export default {
             try { m = JSON.parse(evt.data); } catch (e) { return; }
             markActivity();
             if (m.type === "ready") {
+              if (m.auto_approve !== undefined) autoApprove.value = !!m.auto_approve;
               curSessionId = m.session_id || curSessionId;
               readOnly.value = !!m.read_only;
+              if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
               mutateAllowed.value = !!m.mutate_allowed;
               maybeSeedResolve();
-              // hydrate history
+              // hydrate history — reconstruct the full transcript INCLUDING the
+              // command window (tool calls + their output), not just the text
+              // typed by the user and assistant. toolCall blocks live on the
+              // assistant message; their output arrives as separate
+              // {role:"toolResult", toolCallId, ...} messages that we match back.
               messages.value = [];
               currentIdx = -1;
+              const toolById = {};
               (m.history || []).forEach((hm) => {
                 if (hm.role === "user") {
                   const txt = typeof hm.content === "string"
                     ? hm.content
                     : (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-                  messages.value.push({ role: "user", text: txt });
+                  if (txt) messages.value.push({ role: "user", text: txt });
                 } else if (hm.role === "assistant") {
-                  const txt = (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-                  if (txt) messages.value.push({ role: "assistant", text: txt, tools: [], done: true });
+                  const content = Array.isArray(hm.content) ? hm.content : [];
+                  const txt = content.filter((c) => c.type === "text").map((c) => c.text).join("");
+                  const tools = content
+                    .filter((c) => c.type === "toolCall")
+                    .map((c) => {
+                      const tool = {
+                        id: c.id,
+                        name: c.name,
+                        args: c.arguments ? JSON.stringify(c.arguments, null, 2) : "",
+                        result: "",
+                        done: true,
+                        isError: false,
+                      };
+                      toolById[c.id] = tool;
+                      return tool;
+                    });
+                  if (txt || tools.length) {
+                    messages.value.push({ role: "assistant", text: txt, tools, done: true });
+                  }
+                } else if (hm.role === "toolResult") {
+                  const tool = toolById[hm.toolCallId];
+                  if (tool) {
+                    const txt = Array.isArray(hm.content)
+                      ? hm.content.filter((c) => c.type === "text").map((c) => c.text).join("\n")
+                      : (typeof hm.content === "string" ? hm.content : "");
+                    tool.result = txt.length > 4000 ? txt.slice(0, 4000) + "\n...(truncated)" : txt;
+                    tool.isError = !!hm.isError;
+                  }
                 }
               });
               scrollToBottom();
@@ -598,6 +661,8 @@ export default {
               autoApprove.value = m.value;
             } else if (m.type === "readonly_state") {
               readOnly.value = m.value;
+            } else if (m.type === "allow_email_state") {
+              allowEmail.value = m.value;
               messages.value.push({
                 role: "system",
                 text: m.value
@@ -676,6 +741,11 @@ export default {
 
     function sendAutoApprove(val) {
       if (ws) ws.send(JSON.stringify({ type: "set_autoapprove", value: val }));
+      // Remember it for next time. Without this the toggle is per-socket, so a refresh or a
+      // second window starts over - the "sometimes auto-approve does not work" bug.
+      saveAIAutoApprove(!!val).catch(() => {
+        notifyError("Auto-approve is on for this window, but could not be saved as your default.");
+      });
     }
 
     function onModelChange(val) {
@@ -758,6 +828,7 @@ export default {
 
     return {
       agentId,
+      isDecision,
       hostname,
       clientSite,
       connectionLost,
@@ -773,6 +844,8 @@ export default {
       autoApprove,
       autoapproveAllowed,
       readOnly,
+      allowEmail,
+      sendAllowEmail,
       mutateAllowed,
       setReadonly,
       pendingApproval,
