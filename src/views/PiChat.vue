@@ -111,7 +111,12 @@
       <div v-for="(msg, i) in messages" :key="i" class="q-mb-md">
         <!-- user -->
         <div v-if="msg.role === 'user'" class="row justify-end">
-          <div class="pi-bubble pi-user">{{ msg.text }}</div>
+          <!-- pi-text carries `white-space: pre-wrap`. Without it the browser collapses every
+               run of whitespace and drops newlines, so anything pasted in - a log extract, a
+               command, a list, an indented block - rendered as one unreadable paragraph the
+               instant it was sent, even though it looked right in the textarea. The assistant
+               bubble always had it; the user's own message did not. -->
+          <div class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
         </div>
         <!-- assistant -->
         <div v-else-if="msg.role === 'assistant'" class="row justify-start">
@@ -139,7 +144,7 @@
         </div>
         <!-- system/info -->
         <div v-else class="row justify-center">
-          <div class="text-caption text-grey-5">{{ msg.text }}</div>
+          <div class="text-caption text-grey-5 pi-text">{{ msg.text }}</div>
         </div>
       </div>
       <div v-if="streaming" class="row items-center q-gutter-xs q-mt-xs">
