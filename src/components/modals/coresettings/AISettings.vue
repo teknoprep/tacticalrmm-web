@@ -1,7 +1,10 @@
 <template>
   <div>
-    <div class="text-subtitle2">Pi.dev AI Assistant</div>
-    <q-separator class="q-mb-sm" />
+    <settings-section
+      first
+      title="Pi.dev AI Assistant"
+      tip="Master switches for the AI module. These four toggles take effect only after you press Save at the bottom of this dialog; the Providers and Models tables below save immediately."
+    />
 
     <!-- global toggles -->
     <q-card-section class="row q-gutter-md">
@@ -38,11 +41,15 @@
     </div>
 
     <!-- providers -->
-    <div class="row items-center q-mb-xs">
-      <div class="text-subtitle2">Providers</div>
-      <q-space />
-      <q-btn dense flat icon="add" label="Add provider" no-caps @click="addProvider" />
-    </div>
+    <settings-section
+      dense
+      title="Providers"
+      tip="The AI vendors this server may call, and where each API key is stored. Keys are held server-side and are never sent to the browser. Adding a provider does not enable any model on its own — add the models below."
+    >
+      <template #action>
+        <q-btn dense flat icon="add" label="Add provider" no-caps @click="addProvider" />
+      </template>
+    </settings-section>
     <q-table
       :rows="providers"
       :columns="providerColumns"
@@ -77,11 +84,23 @@
     </q-table>
 
     <!-- models -->
-    <div class="row items-center q-mb-xs q-mt-lg">
-      <div class="text-subtitle2">Models</div>
-      <q-space />
-      <q-btn dense flat icon="add" label="Add model" no-caps :disable="providers.length === 0" @click="addModel" />
-    </div>
+    <settings-section
+      dense
+      title="Models"
+      tip="The specific models a user can pick. The starred model is the default. Which roles may use which model is set per role in Accounts → Roles → Pi.dev AI."
+    >
+      <template #action>
+        <q-btn
+          dense
+          flat
+          icon="add"
+          label="Add model"
+          no-caps
+          :disable="providers.length === 0"
+          @click="addModel"
+        />
+      </template>
+    </settings-section>
     <q-table
       :rows="models"
       :columns="modelColumns"
@@ -110,19 +129,21 @@
     </q-table>
 
     <!-- helpdesk / ticketing integration (below providers + models) -->
-    <div class="row items-center q-mt-lg">
-      <div class="text-subtitle2">Helpdesk / Ticketing Integration</div>
-      <q-space />
-      <q-btn
-        dense
-        no-caps
-        color="primary"
-        icon="smart_toy"
-        label="Use AI to Help Create These"
-        @click="openAssist"
-      />
-    </div>
-    <q-separator class="q-mb-sm" />
+    <settings-section
+      title="Helpdesk / Ticketing Integration"
+      tip="How this server talks to your ticketing system: the API endpoint, the plain-English policy for when to ticket, and the JavaScript that performs the operations. Any helpdesk works, because the operations are defined here rather than in the product."
+    >
+      <template #action>
+        <q-btn
+          dense
+          no-caps
+          color="primary"
+          icon="smart_toy"
+          label="Use AI to Help Create These"
+          @click="openAssist"
+        />
+      </template>
+    </settings-section>
     <div class="row q-col-gutter-sm q-mb-sm">
       <div class="col-7">
         <q-input
@@ -145,7 +166,12 @@
       </div>
     </div>
 
-    <div class="text-caption text-weight-medium q-mt-sm">Helpdesk Ticket Policy (prompt)</div>
+    <div class="row items-center no-wrap q-mt-sm">
+      <div class="text-caption text-weight-medium">Helpdesk Ticket Policy (prompt)</div>
+      <info-tip
+        text="A prompt, not code — plain English, no syntax to get right. It is injected into every AI session and scheduled run, so an edit here changes behaviour everywhere at once. Saved with the Save button below."
+      />
+    </div>
     <q-input
       :model-value="settings.ai_helpdesk_prompt"
       type="textarea"
@@ -160,7 +186,12 @@
       (defined by the code below) to call. Injected into every AI session and scheduled run.
     </div>
 
-    <div class="text-caption text-weight-medium">Helpdesk Integration Code (helpdesk.js)</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium">Helpdesk Integration Code (helpdesk.js)</div>
+      <info-tip
+        text="Real JavaScript, executed server-side on the bridge — the same trust level as the script library, so only users who can edit core settings may change it. This is the deterministic half: the model may only call the operations defined here."
+      />
+    </div>
     <q-input
       :model-value="settings.ai_helpdesk_code"
       type="textarea"
@@ -241,26 +272,30 @@
       </div>
     </div>
 
-    <div class="row items-center q-mt-md">
-      <div class="text-subtitle2">Ticket Automation (pilot)</div>
-      <q-space />
-      <q-toggle
-        :model-value="settings.ai_ticket_automation_enabled"
-        label="Enabled (master switch)"
-        left-label
-        @update:model-value="update('ai_ticket_automation_enabled', $event)"
-      />
-    </div>
-    <div class="row justify-end q-mb-xs">
+    <settings-section
+      title="Ticket Automation (pilot)"
+      tip="Autonomous triage of open tickets. Two separate scopes govern it: what the AI may READ (triage and comment on) and what it may ACT on. Anything outside the act-on lists is look-only."
+    >
+      <template #action>
+        <q-toggle
+          :model-value="settings.ai_ticket_automation_enabled"
+          label="Enabled (master switch)"
+          left-label
+          @update:model-value="update('ai_ticket_automation_enabled', $event)"
+        />
+      </template>
+    </settings-section>
+    <div class="row items-center q-mb-xs">
       <q-toggle
         :model-value="settings.ai_ticket_act_on_alerts"
         label="Act on alerts (cancel non-actionable, claim actionable)"
-        left-label
         color="deep-orange"
         @update:model-value="update('ai_ticket_act_on_alerts', $event)"
       />
+      <info-tip
+        text="Applies to alert tickets only, and only for clients listed under 3 below. Off = alerts are triaged and noted but never cancelled or claimed."
+      />
     </div>
-    <q-separator class="q-mb-sm" />
     <div class="text-caption text-grey q-mb-sm">
       Autonomous ticket triage. The poller lists open tickets via the
       <code>list_open_tickets</code> operation in the integration code above (works with any
@@ -270,7 +305,12 @@
     </div>
 
     <!-- Granular, no-JSON scope controls (these read/write ai_ticket_scope under the hood) -->
-    <div class="text-caption text-weight-medium text-primary q-mt-xs">1 &middot; What the AI READS (triage scope)</div>
+    <div class="row items-center no-wrap q-mt-xs">
+      <div class="text-caption text-weight-medium text-primary">1 &middot; What the AI READS (triage scope)</div>
+      <info-tip
+        text="Reading is triage only: the AI classifies the ticket and posts an internal note with a chat link. Widening this is low-risk — it never changes a device or emails a customer on the strength of reading alone."
+      />
+    </div>
     <q-toggle
       :model-value="scopeBool('look_at_all_unassigned', false)"
       label="Read &amp; triage EVERY open, unassigned / bot-owned ticket"
@@ -300,7 +340,12 @@
       plus a chat link. It never changes a device or emails a customer just from reading.
     </div>
 
-    <div class="text-caption text-weight-medium text-primary">2 &middot; How the AI RECOGNIZES an alert ticket</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium text-primary">2 &middot; How the AI RECOGNIZES an alert ticket</div>
+      <info-tip
+        text="How a machine-generated alert is told apart from a human ticket — by subject prefix or sending domain. This only classifies; what may be done with an alert is set by the act-on lists in 3 and by the Act-on-alerts toggle above."
+      />
+    </div>
     <q-select
       :model-value="alertList('subject_starts_with')"
       multiple
@@ -328,7 +373,12 @@
       @update:model-value="setAlertList('from_email_domains', $event)"
     />
 
-    <div class="text-caption text-weight-medium text-primary">3 &middot; What the AI may ACT on (auto-manage)</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium text-primary">3 &middot; What the AI may ACT on (auto-manage)</div>
+      <info-tip
+        text="The consequential list: cancelling, claiming, touching a device, emailing a customer. Everything not named here stays look-only. Start with one or two trusted clients and widen once you have read the notes it leaves."
+      />
+    </div>
     <q-select
       :model-value="scopeList('auto_action_domains')"
       multiple
@@ -372,7 +422,12 @@
       />
     </q-expansion-item>
 
-    <div class="text-caption text-weight-medium">Ticket Triage Policy (prompt)</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium">Ticket Triage Policy (prompt)</div>
+      <info-tip
+        text="Deployment-specific classification rules: your stages, your alert patterns, worked examples. A prompt, so it can be adjusted for any ticketing system without a code change."
+      />
+    </div>
     <q-input
       :model-value="settings.ai_ticket_triage_prompt"
       type="textarea"
@@ -387,7 +442,12 @@
       above, this is a prompt &mdash; adjust it on the fly for any ticketing system.
     </div>
 
-    <div class="text-caption text-weight-medium">Decision-Chat Policy (prompt)</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium">Decision-Chat Policy (prompt)</div>
+      <info-tip
+        text="Governs the ticket chat where a technician works a ticket alongside the AI. The dynamic parts — the ticket itself, resolved context, per-turn approvals — are added automatically. Blank uses the built-in default."
+      />
+    </div>
     <q-input
       :model-value="settings.ai_ticket_decision_prompt"
       type="textarea"
@@ -404,16 +464,18 @@
       Edit freely &mdash; leave blank to use the built‑in default.
     </div>
 
-    <q-separator class="q-my-md" />
-    <div class="row items-center">
-      <div class="text-subtitle2">Model Catalog Watch</div>
-      <q-space />
-      <q-toggle
-        :model-value="settings.ai_model_catalog_enabled"
-        label="Enabled"
-        @update:model-value="update('ai_model_catalog_enabled', $event)"
-      />
-    </div>
+    <settings-section
+      title="Model Catalog Watch"
+      tip="Re-reads what each enabled provider actually offers and compares it with last time, so a model retired upstream raises a ticket instead of failing silently on the next scheduled run."
+    >
+      <template #action>
+        <q-toggle
+          :model-value="settings.ai_model_catalog_enabled"
+          label="Enabled"
+          @update:model-value="update('ai_model_catalog_enabled', $event)"
+        />
+      </template>
+    </settings-section>
     <div class="text-caption text-grey q-mb-sm">
       Providers add and retire models without notice. On a schedule this re-reads what each
       enabled provider actually offers and compares it with what it saw last time. Newly
@@ -466,201 +528,24 @@
       </div>
     </div>
 
-    <q-separator class="q-my-md" />
-    <div class="row items-center">
-      <div class="text-subtitle2">Daily Activity Report (email)</div>
-      <q-space />
-      <q-toggle
-        :model-value="settings.ai_daily_report_enabled"
-        label="Enabled"
-        @update:model-value="update('ai_daily_report_enabled', $event)"
-      />
-    </div>
-    <div class="text-caption text-grey q-mb-sm">
-      One email covering <b>everything that happened on the helpdesk</b> in the last N hours &mdash;
-      staff replies and closures, customer replies and the AI's own actions, with a direct link on
-      every ticket. It also calls out tickets <b>no AI touched</b> and anything still unassigned.
-    </div>
-    <div class="row q-col-gutter-md items-start q-mb-sm">
-      <q-input
-        class="col-2"
-        dense
-        outlined
-        mask="##:##"
-        hint="Send time (server time)"
-        :model-value="settings.ai_daily_report_time"
-        label="Send at"
-        :disable="!settings.ai_daily_report_enabled"
-        @update:model-value="update('ai_daily_report_time', $event)"
-      />
-      <q-input
-        class="col-2"
-        type="number"
-        dense
-        outlined
-        hint="How far back to look"
-        :model-value="settings.ai_daily_report_hours"
-        label="Hours covered"
-        :disable="!settings.ai_daily_report_enabled"
-        @update:model-value="update('ai_daily_report_hours', Number($event))"
-      />
-      <q-input
-        class="col-5"
-        dense
-        outlined
-        hint="Comma-separated. Blank = SMTP alert recipients."
-        :model-value="settings.ai_daily_report_recipients"
-        label="Email to"
-        :disable="!settings.ai_daily_report_enabled"
-        @update:model-value="update('ai_daily_report_recipients', $event)"
-      />
-      <div class="col-3">
-        <q-toggle
-          :model-value="settings.ai_daily_report_all_teams"
-          label="All helpdesk teams"
-          :disable="!settings.ai_daily_report_enabled"
-          @update:model-value="update('ai_daily_report_all_teams', $event)"
-        />
-        <div class="text-caption text-grey">Off = only the teams the AI works.</div>
-      </div>
-    </div>
-    <div class="row q-col-gutter-md items-center q-mb-xs">
-      <q-toggle
-        class="col-auto"
-        :model-value="settings.ai_daily_report_ai_summary"
-        label="Open with an AI executive summary"
-        :disable="!settings.ai_daily_report_enabled"
-        @update:model-value="update('ai_daily_report_ai_summary', $event)"
-      />
-      <div class="col text-caption text-grey">
-        The numbers are always computed in code &mdash; the model only interprets them: how the techs
-        are handling tickets, who is doing well, and what to watch in standards and replies. If it
-        fails, the rest of the report still sends.
-      </div>
-    </div>
-    <q-input
-      class="q-mb-sm"
-      dense
-      outlined
-      autogrow
-      type="textarea"
-      input-style="min-height:170px; font-family: monospace; font-size: 12px"
-      label="Executive summary prompt"
-      hint="What the summary should judge and flag. Leave blank to use the built-in default."
-      :model-value="settings.ai_daily_report_prompt"
-      :disable="!settings.ai_daily_report_enabled || !settings.ai_daily_report_ai_summary"
-      @update:model-value="update('ai_daily_report_prompt', $event)"
+    <settings-section
+      title="Scheduled Reports"
+      tip="Reports are data, not code: add as many as you want, at any cadence — daily, weekdays, weekly or monthly — each with its own window, recipients and options. Use + to add one, the send icon to fire it immediately, and the toggle to park one without deleting it."
     />
+    <AIReportSchedules />
 
-    <q-expansion-item
-      dense
-      dense-toggle
-      label="Time-estimation settings (how &quot;time worked&quot; and &quot;time saved&quot; are calculated)"
-      header-class="text-caption text-primary"
-      class="q-mb-sm"
+    <settings-section
+      title="AI Runtime Updates"
+      tip="Upgrading the AI runtime restarts the bridge, which would drop live chats. So it runs only inside the window you set here and only once nothing is in flight, and it rolls back automatically if the new version fails its compatibility probe."
     >
-      <div class="text-caption text-grey q-mb-sm">
-        These tickets carry no timesheets, so time is derived from the activity log: each person's
-        actions on a ticket are grouped into work sessions and priced. Work done outside the ticket
-        (remote sessions, phone calls) leaves no timestamp, so the result is a <b>floor, not a total</b>
-        &mdash; raise "minutes per action" if a touch really costs your team more.
-      </div>
-      <div class="row q-col-gutter-md items-start">
-        <q-input
-          class="col-2"
-          type="number"
-          dense
-          outlined
-          hint="Gap that starts a new session"
-          :model-value="settings.ai_report_session_gap_minutes"
-          label="Session gap (min)"
-          @update:model-value="update('ai_report_session_gap_minutes', Number($event))"
+      <template #action>
+        <q-toggle
+          :model-value="settings.ai_runtime_update_enabled"
+          label="Enabled"
+          @update:model-value="update('ai_runtime_update_enabled', $event)"
         />
-        <q-input
-          class="col-2"
-          type="number"
-          dense
-          outlined
-          hint="Cost of one reply / note"
-          :model-value="settings.ai_report_minutes_per_message"
-          label="Minutes per action"
-          @update:model-value="update('ai_report_minutes_per_message', Number($event))"
-        />
-        <q-input
-          class="col-2"
-          type="number"
-          dense
-          outlined
-          hint="Floor per session"
-          :model-value="settings.ai_report_min_session_minutes"
-          label="Min session (min)"
-          @update:model-value="update('ai_report_min_session_minutes', Number($event))"
-        />
-        <q-input
-          class="col-2"
-          type="number"
-          dense
-          outlined
-          hint="Cap: idle gaps are never billed"
-          :model-value="settings.ai_report_max_session_minutes"
-          label="Max session (min)"
-          @update:model-value="update('ai_report_max_session_minutes', Number($event))"
-        />
-        <q-input
-          class="col-2"
-          type="number"
-          dense
-          outlined
-          hint="History used to learn human times"
-          :model-value="settings.ai_report_baseline_days"
-          label="Baseline (days)"
-          @update:model-value="update('ai_report_baseline_days', Number($event))"
-        />
-      </div>
-      <q-input
-        class="q-mt-sm"
-        dense
-        outlined
-        autogrow
-        label="Fallback minutes per ticket type (JSON)"
-        hint="Used only when there is no human-handled sample to learn from."
-        :model-value="settings.ai_report_fallback_minutes"
-        @update:model-value="update('ai_report_fallback_minutes', $event)"
-      />
-    </q-expansion-item>
-    <div class="row q-col-gutter-md items-center q-mb-sm">
-      <div class="col-auto">
-        <q-btn
-          outline
-          color="primary"
-          icon="mail"
-          label="Send now"
-          :loading="reportSending"
-          @click="sendReportNow"
-        />
-        <q-tooltip>Builds and emails the report immediately, ignoring the schedule.</q-tooltip>
-      </div>
-      <div class="col text-caption text-grey">
-        <span v-if="settings.ai_daily_report_last_run">
-          Last sent {{ new Date(settings.ai_daily_report_last_run).toLocaleString() }}
-          <span v-if="settings.ai_daily_report_last_result">
-            &mdash; {{ settings.ai_daily_report_last_result }}
-          </span>
-        </span>
-        <span v-else>Never sent yet.</span>
-      </div>
-    </div>
-
-    <q-separator class="q-my-md" />
-    <div class="row items-center">
-      <div class="text-subtitle2">AI Runtime Updates</div>
-      <q-space />
-      <q-toggle
-        :model-value="settings.ai_runtime_update_enabled"
-        label="Enabled"
-        @update:model-value="update('ai_runtime_update_enabled', $event)"
-      />
-    </div>
+      </template>
+    </settings-section>
     <div class="text-caption text-grey q-mb-sm">
       Updating the AI runtime restarts the bridge, which would drop live chats and in-flight
       background work. So it only runs (1) inside the window you choose here, and (2) once
@@ -767,16 +652,18 @@
       </div>
     </div>
 
-    <q-separator class="q-my-md" />
-    <div class="row items-center">
-      <div class="text-subtitle2">Alert Verifiers (prove it before acting)</div>
-      <q-space />
-      <q-toggle
-        :model-value="settings.ai_verifiers_enabled"
-        label="Enabled"
-        @update:model-value="update('ai_verifiers_enabled', $event)"
-      />
-    </div>
+    <settings-section
+      title="Alert Verifiers (prove it before acting)"
+      tip="Runs before the model is ever called: a verifier gathers read-only evidence from the device and rules on the alert in code, not by AI. A proven-harmless alert is closed without costing an AI call; a proven-real one is pinned open so nothing later dismisses it."
+    >
+      <template #action>
+        <q-toggle
+          :model-value="settings.ai_verifiers_enabled"
+          label="Enabled"
+          @update:model-value="update('ai_verifiers_enabled', $event)"
+        />
+      </template>
+    </settings-section>
     <div class="text-caption text-grey q-mb-sm">
       Machine-generated alerts often describe a non-problem &mdash; and just as often hide a real
       one. Deciding from the alert <em>text</em> is guesswork, so a verifier goes and looks at the
@@ -796,7 +683,12 @@
       tickets before it is allowed to close anything.
     </div>
 
-    <div class="text-caption text-weight-medium">Verifier Rules (verifiers.js)</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium">Verifier Rules (verifiers.js)</div>
+      <info-tip
+        text="Real JavaScript, run before the model. Adding a new alert type is a rule here, not a code change. Use Check rules to validate them and Dry-run test to try one against a live ticket without changing it."
+      />
+    </div>
     <q-input
       :model-value="settings.ai_verifier_code"
       type="textarea"
@@ -935,8 +827,10 @@
       </q-card-section>
     </q-card>
 
-    <q-separator class="q-my-md" />
-    <div class="text-subtitle2 q-mb-xs">AI Procedures (knowledge mining)</div>
+    <settings-section
+      title="AI Procedures (knowledge mining)"
+      tip="A library of reusable, helpdesk-agnostic procedures (symptom → cause → fix → verify) distilled from how tickets actually get closed, then matched back into later runs. Browse, edit and approve them under Tools → AI Procedures."
+    />
     <div class="text-caption text-grey q-mb-sm">
       Learns reusable, helpdesk-agnostic procedures (symptom &rarr; cause &rarr; fix &rarr; verify) from how
       tickets get closed &mdash; a backfill on first run, then incremental. View/edit them in
@@ -975,7 +869,12 @@
         @update:model-value="update('ai_procedures_backfill_days', Number($event))"
       />
     </div>
-    <div class="text-caption text-weight-medium">Procedure Mining Policy (prompt)</div>
+    <div class="row items-center no-wrap">
+      <div class="text-caption text-weight-medium">Procedure Mining Policy (prompt)</div>
+      <info-tip
+        text="Controls what counts as a reusable procedure versus a one-off or client-specific fact. Mining only runs when both toggles above are on; the interval sets the real cadence. Blank uses the built-in default."
+      />
+    </div>
     <q-input
       :model-value="settings.ai_procedures_mining_prompt"
       type="textarea"
@@ -1173,6 +1072,7 @@
 </template>
 
 <script>
+import AIReportSchedules from "@/components/modals/coresettings/AIReportSchedules.vue";
 import { ref, computed, onMounted } from "vue";
 import {
   fetchAIProviders,
@@ -1191,13 +1091,17 @@ import {
   refreshModelCatalog,
   getRuntimeStatus,
   updateRuntimeNow,
-  sendDailyReportNow,
 } from "@/api/core";
 import { notifySuccess, notifyError } from "@/utils/notify";
 import { renderMarkdown } from "@/utils/markdown";
+// Presentational only: a consistent section heading + divider, and the blue
+// hover-for-explanation icon. Neither touches settings or emits anything.
+import SettingsSection from "@/components/ui/SettingsSection.vue";
+import InfoTip from "@/components/ui/InfoTip.vue";
 
 export default {
   name: "AISettings",
+  components: { SettingsSection, InfoTip, AIReportSchedules },
   props: {
     settings: { type: Object, required: true },
   },
@@ -1223,20 +1127,6 @@ export default {
         notifyError(e?.response?.data?.error || String(e));
       }
       catalogChecking.value = false;
-    }
-
-    // ---- Daily activity report ----
-    const reportSending = ref(false);
-    async function sendReportNow() {
-      reportSending.value = true;
-      try {
-        const r = await sendDailyReportNow();
-        notifySuccess(r.result || "sent", 8000);
-        if (r.last_run) update("ai_daily_report_last_run", r.last_run);
-      } catch (e) {
-        notifyError(e?.response?.data?.error || String(e));
-      }
-      reportSending.value = false;
     }
 
     // ---- AI runtime updates (scheduled, only when idle) ----
@@ -1641,8 +1531,6 @@ export default {
       renderMarkdown,
       catalogChecking,
       runCatalogRefresh,
-      reportSending,
-      sendReportNow,
       runtime,
       runtimeLoading,
       runtimeUpdating,

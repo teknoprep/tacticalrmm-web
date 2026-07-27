@@ -46,6 +46,15 @@ export function openAgentWindow(agent_id) {
   });
 }
 
+// Remembered Auto-approve preference. Lives on the user (not the socket) so the choice
+// survives refreshes and applies to every AI chat window the tech opens.
+export async function saveAIAutoApprove(value) {
+  const { data } = await axios.patch("/accounts/users/ui/", {
+    ai_autoapprove_default: !!value,
+  });
+  return data;
+}
+
 // Pi.dev AI assistant
 export function runPiChat(agent_id, query = {}) {
   const url = router.resolve({

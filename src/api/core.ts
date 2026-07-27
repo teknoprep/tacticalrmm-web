@@ -478,3 +478,47 @@ export async function previewBulkAITargets(payload: Record<string, unknown>) {
   const { data } = await axios.post(`${baseUrl}/ai/bulk/preview/`, payload);
   return data;
 }
+
+// --- Operator-defined AI reports (any cadence) --------------------------------
+export interface AIReportSchedule {
+  id?: number;
+  name: string;
+  kind: "activity" | "open_tickets";
+  enabled: boolean;
+  cadence: "daily" | "weekdays" | "weekly" | "monthly";
+  run_at: string;
+  weekday?: number;
+  day_of_month?: number;
+  window_hours?: number | null;
+  recipients: string;
+  options?: Record<string, unknown>;
+  last_run?: string | null;
+  last_result?: string;
+  cadence_display?: string;
+  kind_display?: string;
+  window_hours_effective?: number;
+}
+
+export async function fetchAIReportSchedules() {
+  const { data } = await axios.get("/core/ai/report-schedules/");
+  return data as AIReportSchedule[];
+}
+
+export async function saveAIReportSchedule(s: AIReportSchedule) {
+  if (s.id) {
+    const { data } = await axios.put(`/core/ai/report-schedules/${s.id}/`, s);
+    return data as AIReportSchedule;
+  }
+  const { data } = await axios.post("/core/ai/report-schedules/", s);
+  return data as AIReportSchedule;
+}
+
+export async function deleteAIReportSchedule(id: number) {
+  const { data } = await axios.delete(`/core/ai/report-schedules/${id}/`);
+  return data;
+}
+
+export async function runAIReportScheduleNow(id: number) {
+  const { data } = await axios.post(`/core/ai/report-schedules/${id}/`);
+  return data as string;
+}

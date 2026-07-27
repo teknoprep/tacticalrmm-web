@@ -77,24 +77,27 @@
         :model-value="!readOnly"
         dense
         color="deep-orange"
-        :label="readOnly ? 'Read-only' : 'Write mode'"
+        :label="readOnly ? 'Read-only (devices)' : 'Write mode (devices)'"
         class="q-mr-sm"
         @update:model-value="(v) => setReadonly(!v)"
       >
         <q-tooltip>
-          Read-only gathers info and proposes fixes without changing anything.
-          Switch to Write mode to let Pi apply changes.
+          Read-only gathers info and proposes fixes without changing the DEVICES in
+          this session. Switch to Write mode to let Pi apply changes on the machines.
+          Ticket actions (reply to the customer, internal note, create a ticket, KB)
+          do not need Write mode — they are approved per call.
         </q-tooltip>
       </q-toggle>
       <q-badge
         v-else-if="readOnly"
         color="blue-grey"
-        label="read-only"
+        label="read-only (devices)"
         class="q-mr-sm"
       >
         <q-tooltip>
-          This session can only inspect devices. Changes require an account with
-          AI write (mutate) rights.
+          This session can only inspect devices. DEVICE changes require an account
+          with AI write (mutate) rights. Ticket actions (reply, note, create, KB) are
+          unaffected and still available, with approval.
         </q-tooltip>
       </q-badge>
       <q-badge
@@ -317,6 +320,7 @@ import { useRoute, useRouter } from "vue-router";
 import { getBaseUrl } from "@/boot/axios";
 import {
   createPiSession,
+  saveAIAutoApprove,
   createPiMultiSession,
   decodePiMachines,
   encodePiMachines,
@@ -566,6 +570,9 @@ export default {
           }));
           selectedModel.value = data.model_id;
           autoapproveAllowed.value = !!data.autoapprove_allowed;
+          // The server remembers the operator's Auto-approve choice; render THAT rather
+          // than defaulting to off, or a refresh looks like the setting silently died.
+          if (data.auto_approve !== undefined) autoApprove.value = !!data.auto_approve;
 
           const url = `${wsBase()}/pi/ws/${data.token}/`;
           ws = new WebSocket(url);
@@ -593,6 +600,7 @@ export default {
             try { m = JSON.parse(evt.data); } catch (e) { return; }
             markActivity();
             if (m.type === "ready") {
+              if (m.auto_approve !== undefined) autoApprove.value = !!m.auto_approve;
               curSessionId = m.session_id || curSessionId;
               readOnly.value = !!m.read_only;
               if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
@@ -733,6 +741,11 @@ export default {
 
     function sendAutoApprove(val) {
       if (ws) ws.send(JSON.stringify({ type: "set_autoapprove", value: val }));
+      // Remember it for next time. Without this the toggle is per-socket, so a refresh or a
+      // second window starts over - the "sometimes auto-approve does not work" bug.
+      saveAIAutoApprove(!!val).catch(() => {
+        notifyError("Auto-approve is on for this window, but could not be saved as your default.");
+      });
     }
 
     function onModelChange(val) {
