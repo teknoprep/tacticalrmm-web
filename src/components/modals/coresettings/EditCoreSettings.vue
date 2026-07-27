@@ -1,5 +1,9 @@
 <template>
-  <q-card style="min-width: 60vw">
+  <!-- `min-width` alone let any wide child (the scheduled-reports table was the one that did it)
+       stretch this card past the edge of the browser window, leaving the dialog frame wider than
+       the viewport and the right-hand side unreachable. The maximum keeps the card inside the
+       window whatever a tab puts in it, and the tab content scrolls instead. -->
+  <q-card style="min-width: 60vw; max-width: 95vw">
     <q-splitter v-model="splitterModel">
       <template v-slot:before>
         <q-tabs dense v-model="tab" vertical class="text-primary">

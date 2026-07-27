@@ -20,67 +20,75 @@
       (so a weekly email can still cover just the last 24 hours if that is what you want).
     </div>
 
-    <q-table
-      dense
-      flat
-      bordered
-      :rows="schedules"
-      :columns="columns"
-      row-key="id"
-      :loading="loading"
-      hide-pagination
-      :rows-per-page-options="[0]"
-      no-data-label="No scheduled reports yet — use + to add one"
-    >
-      <template v-slot:body="props">
-        <q-tr
-          :props="props"
-          :class="props.row.enabled ? 'cursor-pointer' : 'text-grey cursor-pointer'"
-          @click="openEditor(props.row)"
-        >
-          <q-td auto-width @click.stop>
-            <q-toggle
-              dense
-              :model-value="props.row.enabled"
-              @update:model-value="toggle(props.row, $event)"
-            />
-          </q-td>
-          <q-td>
-            <b>{{ props.row.name }}</b>
-            <div class="text-caption text-grey">{{ props.row.kind_display }}</div>
-          </q-td>
-          <q-td>
-            {{ cadenceText(props.row) }}
-            <div class="text-caption text-grey">
-              covers last {{ windowText(props.row) }}
-            </div>
-          </q-td>
-          <q-td>
-            <span class="text-caption">{{ props.row.recipients || "— no recipients —" }}</span>
-          </q-td>
-          <q-td>
-            <div v-if="props.row.last_run" class="text-caption">
-              {{ formatDate(props.row.last_run) }}
-              <div class="text-grey" style="max-width: 320px; white-space: normal">
-                {{ props.row.last_result }}
+    <!-- The parent Global Settings dialog is sized `min-width: 60vw` with no maximum, so any
+         child that reports an intrinsic width wider than the viewport drags the whole card out
+         past the window edge. This table did exactly that once report names, the longer report
+         type labels and the full "last result" sentence were in it. `wrap-cells` lets long text
+         wrap instead of demanding width, and the surrounding div is the hard stop. -->
+    <div class="reports-table">
+      <q-table
+        dense
+        flat
+        bordered
+        wrap-cells
+        :rows="schedules"
+        :columns="columns"
+        row-key="id"
+        :loading="loading"
+        hide-pagination
+        :rows-per-page-options="[0]"
+        no-data-label="No scheduled reports yet — use + to add one"
+      >
+        <template v-slot:body="props">
+          <q-tr
+            :props="props"
+            :class="props.row.enabled ? 'cursor-pointer' : 'text-grey cursor-pointer'"
+            @click="openEditor(props.row)"
+          >
+            <q-td auto-width @click.stop>
+              <q-toggle
+                dense
+                :model-value="props.row.enabled"
+                @update:model-value="toggle(props.row, $event)"
+              />
+            </q-td>
+            <q-td class="col-name">
+              <b>{{ props.row.name }}</b>
+              <div class="text-caption text-grey">{{ props.row.kind_display }}</div>
+            </q-td>
+            <q-td class="col-when">
+              {{ cadenceText(props.row) }}
+              <div class="text-caption text-grey">
+                covers last {{ windowText(props.row) }}
               </div>
-            </div>
-            <span v-else class="text-caption text-grey">never</span>
-          </q-td>
-          <q-td auto-width @click.stop>
-            <q-btn dense flat round icon="send" size="sm" color="primary" @click="runNow(props.row)">
-              <q-tooltip>Send it now</q-tooltip>
-            </q-btn>
-            <q-btn dense flat round icon="edit" size="sm" @click="openEditor(props.row)">
-              <q-tooltip>Edit</q-tooltip>
-            </q-btn>
-            <q-btn dense flat round icon="delete" size="sm" color="negative" @click="remove(props.row)">
-              <q-tooltip>Delete</q-tooltip>
-            </q-btn>
-          </q-td>
-        </q-tr>
-      </template>
-    </q-table>
+            </q-td>
+            <q-td class="col-to">
+              <span class="text-caption">{{ props.row.recipients || "— no recipients —" }}</span>
+            </q-td>
+            <q-td class="col-last">
+              <div v-if="props.row.last_run" class="text-caption">
+                {{ formatDate(props.row.last_run) }}
+                <div class="text-grey col-last-result">
+                  {{ props.row.last_result }}
+                </div>
+              </div>
+              <span v-else class="text-caption text-grey">never</span>
+            </q-td>
+            <q-td auto-width @click.stop>
+              <q-btn dense flat round icon="send" size="sm" color="primary" @click="runNow(props.row)">
+                <q-tooltip>Send it now</q-tooltip>
+              </q-btn>
+              <q-btn dense flat round icon="edit" size="sm" @click="openEditor(props.row)">
+                <q-tooltip>Edit</q-tooltip>
+              </q-btn>
+              <q-btn dense flat round icon="delete" size="sm" color="negative" @click="remove(props.row)">
+                <q-tooltip>Delete</q-tooltip>
+              </q-btn>
+            </q-td>
+          </q-tr>
+        </template>
+      </q-table>
+    </div>
 
     <q-dialog v-model="editing" persistent>
       <q-card style="width: 640px; max-width: 90vw">
@@ -489,3 +497,43 @@ export default {
   },
 };
 </script>
+
+<style scoped>
+/* Hard stop on the table's width. The Global Settings dialog has no max-width, so without this
+   the table's natural width (long report names, the report-type captions, recipient lists and the
+   full "last result" sentence) pushes the whole card wider than the browser window. Cells wrap,
+   and if a very long single token ever appears the table scrolls inside this box rather than
+   dragging the dialog with it. */
+.reports-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.col-name {
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.col-when {
+  min-width: 120px;
+  max-width: 190px;
+}
+
+.col-to {
+  min-width: 140px;
+  max-width: 230px;
+  word-break: break-word;
+}
+
+.col-last {
+  min-width: 160px;
+  max-width: 320px;
+}
+
+/* The result line is a whole sentence ("sent to ... - 5 techs, 323 closed, 344h 44m tech
+   time ..."), so it must wrap rather than set the column width. */
+.col-last-result {
+  white-space: normal;
+  word-break: break-word;
+}
+</style>
