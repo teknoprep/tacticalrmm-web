@@ -1020,8 +1020,14 @@
             label="Provider"
             @update:model-value="onProviderChange"
           />
+          <!-- Bound to providerHasModels (does this key expose ANY models) and NOT to the
+               filtered list. Keying it off the filtered list meant that typing a search term
+               matching nothing emptied the list, which unmounted this select mid-search and
+               swapped in the manual input below - and because the filter string survived the
+               unmount, the computed stayed empty and the select could never come back. One
+               bad search killed model search until the dialog was reopened. -->
           <q-select
-            v-if="availableForProvider.length > 0"
+            v-if="providerHasModels"
             v-model="modelForm.model_id"
             :options="availableForProvider"
             emit-value
@@ -1038,7 +1044,11 @@
             <template #no-option>
               <q-item>
                 <q-item-section class="text-grey">
-                  No models found for this key
+                  {{
+                    availableFilter
+                      ? `No model matches "${availableFilter}" - clear the box to see all ${providerModelCount} available`
+                      : "No models found for this key"
+                  }}
                 </q-item-section>
               </q-item>
             </template>
@@ -1344,6 +1354,15 @@ export default {
       return p ? p.name : null;
     }
 
+    // Everything this provider's key exposes, BEFORE the type-ahead filter. The select's
+    // existence must depend on this, never on the filtered result - see the template.
+    const providerModelsAll = computed(() => {
+      const pname = providerNameById(modelForm.value.provider);
+      return availableModels.value.filter((m) => m.provider === pname);
+    });
+    const providerHasModels = computed(() => providerModelsAll.value.length > 0);
+    const providerModelCount = computed(() => providerModelsAll.value.length);
+
     const availableForProvider = computed(() => {
       const pname = providerNameById(modelForm.value.provider);
       let list = availableModels.value.filter((m) => m.provider === pname);
@@ -1369,6 +1388,8 @@ export default {
 
     function onProviderChange() {
       modelForm.value.model_id = "";
+      // A filter left over from the previous provider would hide that provider's models.
+      availableFilter.value = "";
     }
 
     function onModelPick(val) {
@@ -1488,6 +1509,7 @@ export default {
     const modelDialog = ref(false);
     const modelForm = ref({});
     function addModel() {
+      availableFilter.value = "";
       modelForm.value = {
         provider: providerOptions.value[0]?.value,
         model_id: "",
@@ -1566,6 +1588,9 @@ export default {
       providerNameOptions,
       providerOptions,
       availableForProvider,
+      providerHasModels,
+      providerModelCount,
+      availableFilter,
       loadingAvailable,
       filterAvailable,
       onProviderChange,
