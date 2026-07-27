@@ -79,6 +79,34 @@ const routes = [
   },
 
   {
+    path: "/ai-decision/:token",
+    name: "AIDecision",
+    // Stateful, streaming ticket chat - reuses the device-chat UI (PiChat).
+    component: () => import("@/views/PiChat.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+
+  {
+    path: "/ai-procedures",
+    name: "AIProcedures",
+    component: () => import("@/views/AIProcedures.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+
+  {
+    path: "/ai-ticket-console",
+    name: "AITicketConsole",
+    component: () => import("@/views/AITicketConsole.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+
+  {
     path: "/webterm",
     name: "WebTerm",
     component: () => import("@/views/WebTerminal.vue"),

@@ -20,6 +20,44 @@
         <q-btn dense flat icon="refresh" :loading="loading" @click="load" />
       </div>
       <q-separator />
+      <q-expansion-item
+        v-if="mode === 'agent'"
+        icon="psychology"
+        label="Device Memory (AI notes)"
+        caption="Durable facts Pi remembers about this device across runs"
+        dense
+        header-class="text-primary"
+      >
+        <div class="q-pa-sm">
+          <q-input
+            v-model="deviceNotes"
+            type="textarea"
+            outlined
+            autogrow
+            dense
+            :loading="notesLoading"
+            input-style="min-height:80px; font-family:monospace; font-size:12px"
+            placeholder="No notes yet. Pi saves durable facts here automatically as it works; you can also edit or clear them."
+          />
+          <div class="row items-center q-mt-xs">
+            <div class="text-caption text-grey">Injected into Pi's context on every run on this device.</div>
+            <q-space />
+            <q-btn dense flat no-caps icon="refresh" label="Reload" @click="loadNotes" />
+            <q-btn
+              dense
+              unelevated
+              no-caps
+              color="primary"
+              icon="save"
+              label="Save notes"
+              :loading="notesSaving"
+              class="q-ml-sm"
+              @click="saveNotes"
+            />
+          </div>
+        </div>
+      </q-expansion-item>
+      <q-separator v-if="mode === 'agent'" />
       <q-table
         class="ai-history-table"
         :rows="rows"
@@ -158,8 +196,10 @@ import {
   fetchAIRunsByAgent,
   fetchAIRunsByScope,
   fetchAIHistoryScope,
+  getDeviceNotes,
+  saveDeviceNotes,
 } from "@/api/core";
-import { notifyError } from "@/utils/notify";
+import { notifyError, notifySuccess } from "@/utils/notify";
 
 export default {
   name: "AIHistoryTab",
@@ -170,6 +210,36 @@ export default {
     const tabHeight = computed(() => store.state.tabHeight);
     const rows = ref([]);
     const loading = ref(false);
+    const deviceNotes = ref("");
+    const notesLoading = ref(false);
+    const notesSaving = ref(false);
+
+    async function loadNotes() {
+      if (mode.value !== "agent" || !selectedAgent.value) {
+        deviceNotes.value = "";
+        return;
+      }
+      notesLoading.value = true;
+      try {
+        const d = await getDeviceNotes(selectedAgent.value);
+        deviceNotes.value = d.notes || "";
+      } catch (e) {
+        /* non-fatal: leave notes empty */
+      }
+      notesLoading.value = false;
+    }
+    async function saveNotes() {
+      if (!selectedAgent.value) return;
+      notesSaving.value = true;
+      try {
+        const d = await saveDeviceNotes(selectedAgent.value, deviceNotes.value || "");
+        deviceNotes.value = d.notes || "";
+        notifySuccess("Device notes saved");
+      } catch (e) {
+        notifyError("Failed to save device notes");
+      }
+      notesSaving.value = false;
+    }
 
     // client/site scope derived from the dashboard tree selection
     const scope = computed(() => {
@@ -278,6 +348,7 @@ export default {
       merged.sort((a, b) => (b.when || "").localeCompare(a.when || ""));
       rows.value = merged;
       loading.value = false;
+      loadNotes();
     }
 
     function continueChat(row) {
@@ -330,6 +401,11 @@ export default {
       tabHeight,
       rows,
       loading,
+      deviceNotes,
+      notesLoading,
+      notesSaving,
+      loadNotes,
+      saveNotes,
       columns,
       sourceColor,
       statusColor,
