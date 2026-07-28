@@ -293,6 +293,70 @@
               </q-card-section>
             </q-card>
           </q-dialog>
+          <q-separator class="q-my-sm" />
+          <div class="text-subtitle2">Machines</div>
+          <div class="text-caption text-grey q-mb-xs">
+            The PRIMARY machine is <b>{{ selectedAgentHostname }}</b> &mdash; the device
+            this tab is open on. Add more machines below only if this task needs to
+            reason across them TOGETHER in one run (e.g. decide something on one, then
+            act on another) &mdash; for running the exact same independent check on many
+            machines, use a Bulk AI Command instead.
+          </div>
+          <q-input
+            v-model="form.primary_role"
+            outlined
+            dense
+            label="Primary machine's role (optional, e.g. 'cert host')"
+            maxlength="400"
+            class="q-mb-sm"
+          />
+          <div
+            v-for="(row, i) in form.machines"
+            :key="i"
+            class="row q-col-gutter-sm items-start q-mb-sm"
+          >
+            <div class="col-5">
+              <tactical-dropdown
+                v-model="row.agent_id"
+                :options="agentOptions"
+                label="Machine"
+                outlined
+                dense
+                mapOptions
+                filterable
+              />
+            </div>
+            <div class="col-6">
+              <q-input
+                v-model="row.role"
+                dense
+                outlined
+                label="Role (e.g. 'RD Gateway')"
+                maxlength="400"
+              />
+            </div>
+            <div class="col-1 row justify-center">
+              <q-btn
+                flat
+                dense
+                round
+                icon="remove"
+                color="red"
+                @click="removeMachineRow(i)"
+              >
+                <q-tooltip>Remove this machine</q-tooltip>
+              </q-btn>
+            </div>
+          </div>
+          <q-btn
+            dense
+            flat
+            no-caps
+            icon="add"
+            label="Add machine"
+            :disable="(form.machines || []).length >= 7"
+            @click="addMachineRow"
+          />
           <q-select
             v-model="form.model"
             :options="modelOptions"
@@ -565,11 +629,14 @@ import {
   deleteScheduledAction,
 } from "@/api/core";
 import { runPiChat } from "@/api/agents";
+import { useAgentDropdown } from "@/composables/agents";
 import { renderMarkdown } from "@/utils/markdown";
 import { notifySuccess, notifyError } from "@/utils/notify";
+import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
 
 export default {
   name: "AITasksTab",
+  components: { TacticalDropdown },
   setup() {
     const store = useStore();
     const selectedAgent = computed(() => store.state.selectedRow);
@@ -591,6 +658,22 @@ export default {
     const modelOptions = ref([]);
     const runningTasks = ref({});
     const filter = ref("");
+
+    // multi-machine roster (agent, not counting the primary machine this tab is open
+    // on). Same dropdown data source as PiChat's multi-machine dialog.
+    const { agentOptions, getAgentOptions } = useAgentDropdown();
+    const selectedAgentHostname = computed(() => {
+      const opt = agentOptions.value.find((o) => o.value === selectedAgent.value);
+      return (opt && opt.label) || "this device";
+    });
+    function addMachineRow() {
+      if (!Array.isArray(form.value.machines)) form.value.machines = [];
+      if (form.value.machines.length < 7)
+        form.value.machines.push({ agent_id: null, role: "" });
+    }
+    function removeMachineRow(i) {
+      form.value.machines.splice(i, 1);
+    }
 
     // scope derived from the tree selection (Client|id / Site|id)
     const scope = computed(() => {
@@ -758,6 +841,8 @@ export default {
         alert_threshold: "alert",
         allow_mutating: false,
         enabled: true,
+        primary_role: "",
+        machines: [],
       };
       dialog.value = true;
     }
@@ -765,6 +850,9 @@ export default {
       const f = {
         run_mode: "schedule",
         weekly_days: [],
+        primary_role: "",
+        // deep-copy so editing rows doesn't mutate the table row until Save
+        machines: JSON.parse(JSON.stringify(row.machines || [])),
         monthly_day: 1,
         run_time: "03:00",
         ...row,
@@ -901,6 +989,7 @@ export default {
     onMounted(() => {
       loadModels();
       load();
+      getAgentOptions();
     });
     onBeforeUnmount(stopLivePoll);
 
@@ -937,10 +1026,14 @@ export default {
       assistLoading.value = true;
       try {
         const convo = assistMessages.value.map((m) => ({ role: m.role, content: m.raw || m.text }));
+        const hasMachines = (form.value.machines || []).some((m) => m.agent_id);
         const { reply } = await aiPromptAssist({
           messages: convo,
-          kind: "single",
+          kind: hasMachines ? "multi" : "single",
           current_prompt: form.value.prompt || "",
+          machine_roles: hasMachines
+            ? [form.value.primary_role, ...form.value.machines.map((m) => m.role)].filter(Boolean)
+            : [],
         });
         const parsed = parseTaskProposal(reply || "");
         assistMessages.value.push({
@@ -1010,6 +1103,10 @@ export default {
       liveState,
       openLive,
       stopLivePoll,
+      agentOptions,
+      selectedAgentHostname,
+      addMachineRow,
+      removeMachineRow,
     };
   },
 };
