@@ -100,6 +100,53 @@
           unaffected and still available, with approval.
         </q-tooltip>
       </q-badge>
+      <q-btn
+        flat
+        round
+        dense
+        :icon="soundEnabled || desktopEnabled ? 'notifications_active' : 'notifications_off'"
+        class="q-mr-sm"
+        aria-label="AI completion alerts"
+        @click="primeCompletionAudio"
+      >
+        <q-tooltip>AI completion alerts</q-tooltip>
+        <q-menu dark>
+          <div class="q-pa-md" style="width: 320px; max-width: 90vw">
+            <div class="text-subtitle2 q-mb-sm">AI completion alerts</div>
+            <q-toggle
+              :model-value="soundEnabled"
+              color="primary"
+              label="Play a ding when AI finishes"
+              @update:model-value="setSoundAlert"
+            />
+            <q-toggle
+              :model-value="desktopEnabled"
+              :disable="!notificationSupported || notificationPermission === 'denied'"
+              color="primary"
+              label="Show a desktop notification"
+              @update:model-value="setDesktopNotifications"
+            />
+            <q-toggle
+              v-model="onlyWhenUnfocused"
+              :disable="!desktopEnabled"
+              color="primary"
+              label="Desktop notification only when unfocused"
+            />
+            <div class="text-caption text-grey-5 q-mt-xs">
+              {{ desktopStatus }}
+            </div>
+            <q-separator dark class="q-my-sm" />
+            <q-btn
+              outline
+              dense
+              no-caps
+              icon="notifications"
+              label="Test alerts"
+              @click="testCompletionAlerts"
+            />
+          </div>
+        </q-menu>
+      </q-btn>
       <q-badge
         :color="connected ? 'green' : 'red'"
         :label="connected ? 'connected' : 'disconnected'"
@@ -332,6 +379,7 @@ import {
 } from "@/api/agents";
 import { fetchAITaskRunLive, createDecisionSession } from "@/api/core";
 import { useAgentDropdown } from "@/composables/agents";
+import { useAICompletionAlerts } from "@/composables/aiCompletionAlerts";
 import { notifyError } from "@/utils/notify";
 import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
 
@@ -347,6 +395,33 @@ export default {
     const isDecision = !!decisionToken;
     const agentId = route.params.agent_id;
     const isMulti = agentId === "multi";
+    const {
+      soundEnabled,
+      desktopEnabled,
+      onlyWhenUnfocused,
+      notificationSupported,
+      notificationPermission,
+      desktopStatus,
+      primeAudio: primeCompletionAudio,
+      setDesktopEnabled,
+      finished: announceCompletion,
+      test: testCompletionAlerts,
+    } = useAICompletionAlerts();
+
+    function setSoundAlert(value) {
+      soundEnabled.value = !!value;
+      if (soundEnabled.value) primeCompletionAudio();
+    }
+
+    async function setDesktopNotifications(value) {
+      const enabled = await setDesktopEnabled(value);
+      if (value && !enabled) {
+        notifyError(
+          "Desktop notifications could not be enabled. Check this site's browser notification permission.",
+          5000,
+        );
+      }
+    }
 
     // machines for a multi session, decoded from the ?m= query param
     let multiMachines = [];
@@ -520,13 +595,25 @@ export default {
           scrollToBottom();
           break;
         }
-        case "agent_end":
+        case "agent_end": {
+          // Only announce a turn that was genuinely in progress. This suppresses
+          // reconnect/history hydration, duplicate agent_end events, and an
+          // agent_end that arrives after the operator pressed Stop.
+          const completedActiveTurn = streaming.value;
           if (currentIdx >= 0 && messages.value[currentIdx]) {
             messages.value[currentIdx].done = true;
           }
           streaming.value = false;
           scrollToBottom();
+          if (completedActiveTurn) {
+            announceCompletion({
+              kind: isDecision ? "decision" : "chat",
+              hostname: hostname.value,
+              key: `${curSessionId || "session"}:${streamStartAt.value}`,
+            });
+          }
           break;
+        }
         case "agent_start":
           streaming.value = true;
           streamStartAt.value = Date.now();
@@ -705,6 +792,9 @@ export default {
     function send() {
       const text = input.value.trim();
       if (!text || !connected.value) return;
+      // Prime Web Audio while this click/keypress still counts as a user gesture.
+      // Managed Chromium browsers otherwise may block the later completion ding.
+      primeCompletionAudio();
       messages.value.push({ role: "user", text });
       currentIdx = -1;
       streaming.value = true;
@@ -842,6 +932,16 @@ export default {
       reconnect,
       connected,
       streaming,
+      soundEnabled,
+      desktopEnabled,
+      onlyWhenUnfocused,
+      notificationSupported,
+      notificationPermission,
+      desktopStatus,
+      primeCompletionAudio,
+      setSoundAlert,
+      setDesktopNotifications,
+      testCompletionAlerts,
       messages,
       input,
       modelOptions,

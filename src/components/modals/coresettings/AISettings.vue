@@ -128,6 +128,49 @@
       </template>
     </q-table>
 
+    <!-- standalone desktop / browser execution policy -->
+    <settings-section
+      title="Pi AI Operator — Desktop Access"
+      tip="Controls which RMM workstations Pi Chat and AI Decision may operate through the separate Pi AI Operator service. The desktop model is the initial model for Operator-capable chats; users may still switch to another model allowed by their role."
+    />
+    <q-card-section class="q-gutter-md">
+      <q-checkbox
+        :model-value="settings.ai_operator_enabled"
+        label="Enable desktop access in Pi Chat and AI Decision"
+        @update:model-value="update('ai_operator_enabled', $event)"
+      />
+      <q-select
+        :model-value="settings.ai_operator_default_model"
+        :options="operatorModelOptions"
+        emit-value
+        map-options
+        clearable
+        outlined
+        dense
+        label="Default AI model for desktop access"
+        :disable="!settings.ai_operator_enabled"
+        @update:model-value="update('ai_operator_default_model', $event)"
+      />
+      <q-select
+        :model-value="settings.ai_operator_allowed_agent_ids || []"
+        :options="operatorAgentOptions"
+        emit-value
+        map-options
+        multiple
+        use-chips
+        use-input
+        input-debounce="0"
+        outlined
+        dense
+        label="Allowed Operator workstations"
+        :disable="!settings.ai_operator_enabled"
+        @update:model-value="update('ai_operator_allowed_agent_ids', $event)"
+      />
+      <div class="text-caption text-grey">
+        Desktop tools never reach machines outside this list. Save Global Settings to apply changes.
+      </div>
+    </q-card-section>
+
     <!-- helpdesk / ticketing integration (below providers + models) -->
     <settings-section
       title="Helpdesk / Ticketing Integration"
@@ -1108,6 +1151,7 @@ import { renderMarkdown } from "@/utils/markdown";
 // hover-for-explanation icon. Neither touches settings or emits anything.
 import SettingsSection from "@/components/ui/SettingsSection.vue";
 import InfoTip from "@/components/ui/InfoTip.vue";
+import { useAgentDropdown } from "@/composables/agents";
 
 export default {
   name: "AISettings",
@@ -1315,6 +1359,18 @@ export default {
       notifySuccess("Applied to Code box — click Save to persist");
     }
     const models = ref([]);
+    const { agentOptions, getAgentOptions } = useAgentDropdown();
+    const operatorAgentOptions = computed(() =>
+      (agentOptions.value || []).filter((option) => option && option.value),
+    );
+    const operatorModelOptions = computed(() =>
+      models.value
+        .filter((model) => model.enabled)
+        .map((model) => ({
+          label: `${model.display_name} (${model.provider_name}/${model.model_id})`,
+          value: model.id,
+        })),
+    );
 
     const providerColumns = [
       { name: "name", label: "Provider", field: "name", align: "left" },
@@ -1546,6 +1602,7 @@ export default {
     }
 
     onMounted(loadAll);
+    onMounted(getAgentOptions);
     onMounted(loadRuntimeStatus);
 
     return {
@@ -1583,6 +1640,8 @@ export default {
       applyCode,
       providers,
       models,
+      operatorAgentOptions,
+      operatorModelOptions,
       providerColumns,
       modelColumns,
       providerNameOptions,
