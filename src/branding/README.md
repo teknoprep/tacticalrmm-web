@@ -47,3 +47,35 @@ refreshes it, so the master stays in this directory.
 Edit `index.ts` and `brand.sass`. Colours came from the compiled stylesheet on
 www.blueuc.com (`--primary: #00C4FF`, `--o-color-5: #1B1319`), not from a screenshot,
 so they match the website exactly rather than approximately.
+
+## IMPORTANT: the deployed frontend is NOT built from this source
+
+The bundle serving `rmm.blueuc.com` is the official one that Tactical RMM's updater
+downloads with the sponsorship token:
+
+    python manage.py get_webtar_url
+
+That bundle is what carries the Tier 2 EE features. **Reporting only exists there** --
+the public source ships `src/boot/integrations.ts` with empty arrays, so a source build
+has no Reporting Manager at all. Deploying a source build silently removes Reporting,
+which is exactly what happened on 2026-08-12.
+
+So branding is applied to the official bundle after download:
+
+    python3 src/branding/apply-to-dist.py /var/www/rmm/dist
+    sudo chown -R www-data:www-data /var/www/rmm/dist
+
+**Re-run it after every `update.sh`**, because the updater replaces `dist` wholesale.
+It is idempotent, it refuses nothing, and it warns loudly if the bundle it was pointed at
+has no Reporting UI -- because that means a source build got deployed and branding would
+otherwise hide the real problem behind a cosmetic success.
+
+The source-level integration below is still correct and still maintained, for anyone who
+builds from source deliberately. It just is not what is deployed.
+
+## What this does NOT do
+
+It does not add, unlock or re-enable any EE feature, and it does not touch integration
+registration or licensing code. If a feature is absent from the bundle Amidaware served,
+this tooling leaves it absent. The EE licence forbids working around that, and doing so
+would misrepresent what has been paid for.
