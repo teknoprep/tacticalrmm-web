@@ -63,7 +63,7 @@
           <!-- Reverse (white) logo: this toolbar is dark, so the standard
                dark-text logo would be invisible on it. -->
           <img
-            :src="BRAND.logoReverse"
+            :src="$q.dark.isActive ? BRAND.logoReverse : BRAND.logoDark"
             :alt="BRAND.company"
             style="height: 24px; vertical-align: middle"
             class="q-mr-sm"

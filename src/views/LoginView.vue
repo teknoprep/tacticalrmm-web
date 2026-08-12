@@ -8,7 +8,7 @@
           <q-card-section>
             <div class="text-center q-pt-lg">
               <img
-                :src="BRAND.logoSquare"
+                :src="$q.dark.isActive ? BRAND.logoReverse : BRAND.logoDark"
                 :alt="BRAND.company"
                 style="height: 56px"
                 class="q-mb-sm"
