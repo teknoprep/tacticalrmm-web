@@ -252,7 +252,7 @@ export default {
     const detail = ref({});
     const detailRow = ref(null);
     const openProcedures = () =>
-      window.open("/ai-procedures", "pi-procedures", "width=1400,height=900,menubar=no,toolbar=no");
+      window.open("/ai-procedures", "pi-procedures", "width=1600,height=960,menubar=no,toolbar=no,resizable=yes,scrollbars=yes");
 
     const columns = [
       { name: "updated", label: "Last worked", field: "updated", align: "left", sortable: true,

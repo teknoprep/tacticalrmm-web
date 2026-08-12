@@ -40,6 +40,28 @@
       Providers and models are saved immediately.
     </div>
 
+    <settings-section
+      dense
+      title="AI outbound email From"
+      tip="When a technician tells Pi to send mail (send_email), the server can send AS that tech so replies land in their inbox. Only applies when the tech's account email is on one of these domains. Unattended/scheduled jobs still use a unique pi-*@ address. Domain list is checked server-side — the model cannot spoof arbitrary From addresses."
+    />
+    <q-card-section>
+      <q-select
+        :model-value="settings.ai_mail_tech_from_domains || []"
+        use-input
+        use-chips
+        multiple
+        hide-dropdown-icon
+        input-debounce="0"
+        new-value-mode="add-unique"
+        dense
+        outlined
+        label="Send as the technician when their email is on these domains"
+        hint="Type a domain and press Enter (e.g. blueuc.com). Empty = always use randomized pi-*@ From."
+        @update:model-value="update('ai_mail_tech_from_domains', $event)"
+      />
+    </q-card-section>
+
     <!-- providers -->
     <settings-section
       dense
@@ -131,7 +153,7 @@
     <!-- standalone desktop / browser execution policy -->
     <settings-section
       title="Pi AI Operator — Desktop Access"
-      tip="Controls which RMM workstations Pi Chat and AI Decision may operate through the separate Pi AI Operator service. The desktop model is the initial model for Operator-capable chats; users may still switch to another model allowed by their role."
+      tip="Controls which RMM workstations Pi Chat and AI Decision may operate through the separate Pi AI Operator service. The desktop model is used only when you open Pi Chat on an Operator workstation; normal device chats and AI Decision keep the global default model. Users may still switch models in the picker."
     />
     <q-card-section class="q-gutter-md">
       <q-checkbox
@@ -144,11 +166,12 @@
         :options="operatorModelOptions"
         emit-value
         map-options
-        clearable
         outlined
         dense
         label="Default AI model for desktop access"
+        hint="Only auto-selected when Pi Chat is opened on an Allowed Operator workstation. All other chats use the global default model (e.g. Sonnet 5). You can still switch models manually."
         :disable="!settings.ai_operator_enabled"
+        :rules="settings.ai_operator_enabled ? [val => !!val || 'Choose a desktop model'] : []"
         @update:model-value="update('ai_operator_default_model', $event)"
       />
       <q-select
@@ -209,49 +232,58 @@
       </div>
     </div>
 
-    <div class="row items-center no-wrap q-mt-sm">
-      <div class="text-caption text-weight-medium">Helpdesk Ticket Policy (prompt)</div>
-      <info-tip
-        text="A prompt, not code — plain English, no syntax to get right. It is injected into every AI session and scheduled run, so an edit here changes behaviour everywhere at once. Saved with the Save button below."
+    <q-expansion-item
+      dense
+      icon="description"
+      label="Helpdesk Ticket Policy (prompt)"
+      caption="When/how the AI should ticket — injected into every session"
+      header-class="text-primary"
+      class="q-mb-sm"
+    >
+      <q-input
+        :model-value="settings.ai_helpdesk_prompt"
+        type="textarea"
+        outlined
+        autogrow
+        input-style="min-height: 140px"
+        class="q-pa-sm"
+        label="When/how the AI should ticket, and which operations to call"
+        @update:model-value="update('ai_helpdesk_prompt', $event)"
       />
-    </div>
-    <q-input
-      :model-value="settings.ai_helpdesk_prompt"
-      type="textarea"
-      outlined
-      autogrow
-      input-style="min-height: 140px"
-      label="When/how the AI should ticket, and which operations to call"
-      @update:model-value="update('ai_helpdesk_prompt', $event)"
-    />
-    <div class="text-caption text-grey q-mb-md">
-      Natural-language policy: <em>when</em> to open tickets and <em>which operations</em>
-      (defined by the code below) to call. Injected into every AI session and scheduled run.
-    </div>
+      <div class="text-caption text-grey q-px-sm q-pb-sm">
+        Natural-language policy: <em>when</em> to open tickets and <em>which operations</em>
+        (defined by the code below) to call. Injected into every AI session and scheduled run.
+        Saved with the main <strong>Save</strong> button.
+      </div>
+    </q-expansion-item>
 
-    <div class="row items-center no-wrap">
-      <div class="text-caption text-weight-medium">Helpdesk Integration Code (helpdesk.js)</div>
-      <info-tip
-        text="Real JavaScript, executed server-side on the bridge — the same trust level as the script library, so only users who can edit core settings may change it. This is the deterministic half: the model may only call the operations defined here."
+    <q-expansion-item
+      dense
+      icon="code"
+      label="Helpdesk Integration Code (helpdesk.js)"
+      caption="exports.operations for your ticketing system"
+      header-class="text-primary"
+      class="q-mb-sm"
+    >
+      <q-input
+        :model-value="settings.ai_helpdesk_code"
+        type="textarea"
+        outlined
+        input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
+        class="q-pa-sm"
+        label="JavaScript defining exports.operations for your ticketing system"
+        @update:model-value="update('ai_helpdesk_code', $event)"
       />
-    </div>
-    <q-input
-      :model-value="settings.ai_helpdesk_code"
-      type="textarea"
-      outlined
-      input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
-      label="JavaScript defining exports.operations for your ticketing system"
-      @update:model-value="update('ai_helpdesk_code', $event)"
-    />
-    <div class="text-caption text-grey q-mb-md">
-      Deterministic integration for <strong>any</strong> helpdesk/ERP. Define
-      <code>exports.operations</code> (e.g. create_ticket, reply_to_ticket, add_note,
-      submit_report, resolve_customer), plus optional <code>exports.meta</code> and
-      <code>exports.mutating</code>. In scope: <code>helpdesk.baseUrl</code>,
-      <code>helpdesk.apiKey</code>, <code>fetch</code>. The API key stays server-side and is
-      scrubbed from anything the AI sees. The example targets Odoo/Softhealer &mdash; edit it
-      for Zendesk / Freshdesk / etc. Saved with the main <strong>Save</strong> button.
-    </div>
+      <div class="text-caption text-grey q-px-sm q-pb-sm">
+        Deterministic integration for <strong>any</strong> helpdesk/ERP. Define
+        <code>exports.operations</code> (e.g. create_ticket, reply_to_ticket, add_note,
+        submit_report, resolve_customer), plus optional <code>exports.meta</code> and
+        <code>exports.mutating</code>. In scope: <code>helpdesk.baseUrl</code>,
+        <code>helpdesk.apiKey</code>, <code>fetch</code>. The API key stays server-side and is
+        scrubbed from anything the AI sees. The example targets Odoo/Softhealer &mdash; edit it
+        for Zendesk / Freshdesk / etc. Saved with the main <strong>Save</strong> button.
+      </div>
+    </q-expansion-item>
 
     <div class="row items-center q-gutter-sm q-mb-sm">
       <q-btn
@@ -314,6 +346,26 @@
         </span>
       </div>
     </div>
+
+    <q-separator class="q-my-md" />
+    <settings-section
+      dense
+      title="pi.dev AI Sales Integration"
+      tip="Optional ERP quotations. Reuses Helpdesk API credentials. AI creates DRAFT quotes only when a tech explicitly asks."
+    />
+    <q-card-section class="q-gutter-sm q-px-none">
+      <q-checkbox
+        :model-value="settings.ai_sales_enabled"
+        label="Enable Sales / ERP quotations (sales_call in decision chat)"
+        @update:model-value="update('ai_sales_enabled', $event)"
+      />
+      <q-expansion-item dense icon="description" label="Sales policy prompt" caption="When the AI may create ERP quotes" header-class="text-primary">
+        <q-input :model-value="settings.ai_sales_prompt" type="textarea" outlined autogrow input-style="min-height: 120px" class="q-pa-sm" label="Sales policy" @update:model-value="update('ai_sales_prompt', $event)" />
+      </q-expansion-item>
+      <q-expansion-item dense icon="code" label="Sales integration code (sales.js)" caption="exports.operations for your ERP" header-class="text-primary">
+        <q-input :model-value="settings.ai_sales_code" type="textarea" outlined input-style="min-height: 220px; font-family: monospace; font-size: 12px;" class="q-pa-sm" label="sales.js" @update:model-value="update('ai_sales_code', $event)" />
+      </q-expansion-item>
+    </q-card-section>
 
     <settings-section
       title="Ticket Automation (pilot)"
@@ -465,47 +517,55 @@
       />
     </q-expansion-item>
 
-    <div class="row items-center no-wrap">
-      <div class="text-caption text-weight-medium">Ticket Triage Policy (prompt)</div>
-      <info-tip
-        text="Deployment-specific classification rules: your stages, your alert patterns, worked examples. A prompt, so it can be adjusted for any ticketing system without a code change."
+    <q-expansion-item
+      dense
+      icon="description"
+      label="Ticket Triage Policy (prompt)"
+      caption="How to classify alerts vs actionable tickets"
+      header-class="text-primary"
+      class="q-mb-sm"
+    >
+      <q-input
+        :model-value="settings.ai_ticket_triage_prompt"
+        type="textarea"
+        outlined
+        autogrow
+        input-style="min-height: 120px"
+        class="q-pa-sm"
+        label="How to classify YOUR tickets: what's a clean alert vs actionable, what to draft"
+        @update:model-value="update('ai_ticket_triage_prompt', $event)"
       />
-    </div>
-    <q-input
-      :model-value="settings.ai_ticket_triage_prompt"
-      type="textarea"
-      outlined
-      autogrow
-      input-style="min-height: 120px"
-      label="How to classify YOUR tickets: what's a clean alert vs actionable, what to draft"
-      @update:model-value="update('ai_ticket_triage_prompt', $event)"
-    />
-    <div class="text-caption text-grey q-mb-md">
-      Deployment-specific triage rules (stages, alert patterns, examples). Like the policy
-      above, this is a prompt &mdash; adjust it on the fly for any ticketing system.
-    </div>
+      <div class="text-caption text-grey q-px-sm q-pb-sm">
+        Deployment-specific triage rules (stages, alert patterns, examples). A prompt &mdash;
+        adjust it on the fly for any ticketing system.
+      </div>
+    </q-expansion-item>
 
-    <div class="row items-center no-wrap">
-      <div class="text-caption text-weight-medium">Decision-Chat Policy (prompt)</div>
-      <info-tip
-        text="Governs the ticket chat where a technician works a ticket alongside the AI. The dynamic parts — the ticket itself, resolved context, per-turn approvals — are added automatically. Blank uses the built-in default."
+    <q-expansion-item
+      dense
+      icon="description"
+      label="Decision-Chat Policy (prompt)"
+      caption="How the AI behaves in the ticket chat with a technician"
+      header-class="text-primary"
+      class="q-mb-md"
+    >
+      <q-input
+        :model-value="settings.ai_ticket_decision_prompt"
+        type="textarea"
+        outlined
+        autogrow
+        input-style="min-height: 160px"
+        class="q-pa-sm"
+        label="How the AI behaves in the 'Johnny 5 Need Input!' decision chat (routing, completion, device-fix/email rules)"
+        @update:model-value="update('ai_ticket_decision_prompt', $event)"
       />
-    </div>
-    <q-input
-      :model-value="settings.ai_ticket_decision_prompt"
-      type="textarea"
-      outlined
-      autogrow
-      input-style="min-height: 160px"
-      label="How the AI behaves in the 'Johnny 5 Need Input!' decision chat (routing, completion, device-fix/email rules)"
-      @update:model-value="update('ai_ticket_decision_prompt', $event)"
-    />
-    <div class="text-caption text-grey q-mb-md">
-      Governs the ticket <strong>chat</strong> where a tech works a ticket with the AI: closing/
-      routing rules, the completion policy (review + customer reply), device‑fix and email guidance.
-      The dynamic bits (ticket, resolved context, per‑turn approvals) are added automatically.
-      Edit freely &mdash; leave blank to use the built‑in default.
-    </div>
+      <div class="text-caption text-grey q-px-sm q-pb-sm">
+        Governs the ticket <strong>chat</strong> where a tech works a ticket with the AI: closing/
+        routing rules, the completion policy (review + customer reply), device-fix and email guidance.
+        The dynamic bits (ticket, resolved context, per-turn approvals) are added automatically.
+        Leave blank to use the built-in default.
+      </div>
+    </q-expansion-item>
 
     <settings-section
       title="Model Catalog Watch"
@@ -726,32 +786,37 @@
       tickets before it is allowed to close anything.
     </div>
 
-    <div class="row items-center no-wrap">
-      <div class="text-caption text-weight-medium">Verifier Rules (verifiers.js)</div>
-      <info-tip
-        text="Real JavaScript, run before the model. Adding a new alert type is a rule here, not a code change. Use Check rules to validate them and Dry-run test to try one against a live ticket without changing it."
-      />
-    </div>
-    <q-input
-      :model-value="settings.ai_verifier_code"
-      type="textarea"
-      outlined
-      input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
-      label="JavaScript defining exports.verifiers = [ ... ]"
+    <q-expansion-item
+      dense
+      icon="code"
+      label="Verifier Rules (verifiers.js)"
+      caption="exports.verifiers = [ ... ] — code that proves alerts before AI"
+      header-class="text-primary"
+      class="q-mb-sm"
       :disable="!settings.ai_verifiers_enabled"
-      @update:model-value="update('ai_verifier_code', $event)"
-    />
-    <div class="text-caption text-grey q-mb-sm">
-      Each rule declares: <code>name</code>, <code>match(ticket)</code> (which alerts it owns),
-      <code>host(ticket)</code> (which machine holds the truth), <code>script</code> (read-only
-      evidence to gather), and <code>verdict(evidence)</code> returning
-      <code>noise</code> / <code>actionable</code> / <code>human</code>. Optional:
-      <code>enabled:false</code> to park a rule, <code>shell</code>
-      (<code>/bin/bash</code>&nbsp;|&nbsp;<code>powershell</code>&nbsp;|&nbsp;<code>cmd</code>),
-      <code>identity</code> (how that kind of box states its own FQDN), <code>timeout</code>.
-      Adding a new alert type is a rule here &mdash; no code change. Saved with
-      <strong>Save</strong>.
-    </div>
+    >
+      <q-input
+        :model-value="settings.ai_verifier_code"
+        type="textarea"
+        outlined
+        input-style="min-height: 220px; font-family: monospace; font-size: 12px;"
+        class="q-pa-sm"
+        label="JavaScript defining exports.verifiers = [ ... ]"
+        :disable="!settings.ai_verifiers_enabled"
+        @update:model-value="update('ai_verifier_code', $event)"
+      />
+      <div class="text-caption text-grey q-px-sm q-pb-sm">
+        Each rule declares: <code>name</code>, <code>match(ticket)</code> (which alerts it owns),
+        <code>host(ticket)</code> (which machine holds the truth), <code>script</code> (read-only
+        evidence to gather), and <code>verdict(evidence)</code> returning
+        <code>noise</code> / <code>actionable</code> / <code>human</code>. Optional:
+        <code>enabled:false</code> to park a rule, <code>shell</code>
+        (<code>/bin/bash</code>&nbsp;|&nbsp;<code>powershell</code>&nbsp;|&nbsp;<code>cmd</code>),
+        <code>identity</code> (how that kind of box states its own FQDN), <code>timeout</code>.
+        Adding a new alert type is a rule here &mdash; no code change. Saved with
+        <strong>Save</strong>.
+      </div>
+    </q-expansion-item>
 
     <div class="row q-col-gutter-sm items-start q-mb-sm">
       <div class="col-auto">
@@ -912,25 +977,30 @@
         @update:model-value="update('ai_procedures_backfill_days', Number($event))"
       />
     </div>
-    <div class="row items-center no-wrap">
-      <div class="text-caption text-weight-medium">Procedure Mining Policy (prompt)</div>
-      <info-tip
-        text="Controls what counts as a reusable procedure versus a one-off or client-specific fact. Mining only runs when both toggles above are on; the interval sets the real cadence. Blank uses the built-in default."
+    <q-expansion-item
+      dense
+      icon="description"
+      label="Procedure Mining Policy (prompt)"
+      caption="What counts as a reusable procedure vs a one-off"
+      header-class="text-primary"
+      class="q-mb-md"
+      :disable="!settings.ai_procedures_enabled"
+    >
+      <q-input
+        :model-value="settings.ai_procedures_mining_prompt"
+        type="textarea"
+        outlined
+        autogrow
+        input-style="min-height: 120px"
+        class="q-pa-sm"
+        label="How to distill closed tickets into reusable procedures (leave blank for the built-in default)"
+        @update:model-value="update('ai_procedures_mining_prompt', $event)"
       />
-    </div>
-    <q-input
-      :model-value="settings.ai_procedures_mining_prompt"
-      type="textarea"
-      outlined
-      autogrow
-      input-style="min-height: 120px"
-      label="How to distill closed tickets into reusable procedures (leave blank for the built-in default)"
-      @update:model-value="update('ai_procedures_mining_prompt', $event)"
-    />
-    <div class="text-caption text-grey q-mb-md">
-      Controls what counts as a reusable procedure vs a one-off/client-specific fact. The miner
-      only runs when both toggles are on; the interval sets the real cadence.
-    </div>
+      <div class="text-caption text-grey q-px-sm q-pb-sm">
+        Controls what counts as a reusable procedure vs a one-off/client-specific fact. The miner
+        only runs when both toggles are on; the interval sets the real cadence.
+      </div>
+    </q-expansion-item>
 
     <!-- AI helpdesk-setup assistant -->
     <q-dialog v-model="assistDialog">

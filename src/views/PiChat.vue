@@ -12,6 +12,75 @@
         </div>
       </div>
       <q-space />
+      <!-- Running cost meter. Rendered only when the role carries can_view_ai_cost
+           (or superuser); the server withholds the data entirely otherwise. -->
+      <q-chip
+        v-if="costVisible"
+        dense
+        square
+        :color="costColor"
+        text-color="white"
+        icon="payments"
+        class="q-mr-sm"
+        data-test="ai-cost-meter"
+      >
+        <span v-if="pricingKnown">{{ fmtMoney(sessionCost) }}</span>
+        <span v-else>&mdash;</span>
+        <span v-if="contextWindow" class="q-ml-xs text-caption">
+          &middot; {{ contextPct }}%
+        </span>
+        <q-tooltip anchor="bottom middle" self="top middle" max-width="420px">
+          <div class="text-weight-bold q-mb-xs">This conversation</div>
+          <div v-if="!pricingKnown" class="text-orange-4 q-mb-xs">
+            One of the models in use has no published pricing, so cost cannot be
+            calculated. Totals below are incomplete.
+          </div>
+          <div>
+            Total: <b>{{ fmtMoney(sessionCost) }}</b>
+            &middot; {{ costTurns }} turns
+            &middot; <b>{{ fmtMoney(costPerTurn) }}/turn</b>
+          </div>
+          <div>Last turn: {{ fmtMoney(lastTurnCost) }}</div>
+
+          <!-- Where the money went. cacheWrite/cacheRead usually dominate, which is
+               invisible in a single total. -->
+          <template v-if="costSpend">
+            <div class="text-weight-bold q-mt-sm">Where it went</div>
+            <div>Cache write: {{ fmtMoney(costSpend.cacheWrite) }}</div>
+            <div>Cache read: {{ fmtMoney(costSpend.cacheRead) }}</div>
+            <div>Output: {{ fmtMoney(costSpend.output) }}</div>
+            <div>Input: {{ fmtMoney(costSpend.input) }}</div>
+          </template>
+
+          <template v-if="costByModel.length > 1">
+            <div class="text-weight-bold q-mt-sm">By model</div>
+            <div v-for="bm in costByModel" :key="bm.model">
+              {{ bm.model }} &middot; {{ bm.turns }} turns &middot;
+              {{ fmtMoney(bm.cost) }} ({{ fmtMoney(bm.cost_per_turn) }}/turn)
+            </div>
+            <div v-if="modelSwitches > 0" class="text-orange-4 q-mt-xs">
+              {{ modelSwitches }} model switch{{ modelSwitches === 1 ? "" : "es" }} &mdash;
+              {{ fmtMoney(switchSpend) }} of that was re-caching this conversation into
+              another model. Prefer a new chat over switching mid-conversation.
+            </div>
+          </template>
+
+          <div class="text-weight-bold q-mt-sm">Tokens</div>
+          <div>
+            in {{ fmtTokens(costTokens.input) }} &middot; out
+            {{ fmtTokens(costTokens.output) }} &middot; cache-read
+            {{ fmtTokens(costTokens.cacheRead) }} &middot; cache-write
+            {{ fmtTokens(costTokens.cacheWrite) }}
+          </div>
+          <div v-if="contextWindow">
+            Context: {{ fmtTokens(contextTokens) }} / {{ fmtTokens(contextWindow) }}
+            ({{ contextPct }}%)
+          </div>
+          <div v-if="contextPct >= 80" class="text-orange-4 q-mt-xs">
+            Context is nearly full &mdash; start a new chat soon.
+          </div>
+        </q-tooltip>
+      </q-chip>
       <q-btn
         v-if="!isDecision"
         flat
@@ -109,14 +178,14 @@
         aria-label="AI completion alerts"
         @click="primeCompletionAudio"
       >
-        <q-tooltip>AI completion alerts</q-tooltip>
+        <q-tooltip>AI sound &amp; desktop alerts</q-tooltip>
         <q-menu dark>
           <div class="q-pa-md" style="width: 320px; max-width: 90vw">
-            <div class="text-subtitle2 q-mb-sm">AI completion alerts</div>
+            <div class="text-subtitle2 q-mb-sm">AI sound &amp; desktop alerts</div>
             <q-toggle
               :model-value="soundEnabled"
               color="primary"
-              label="Play a ding when AI finishes"
+              label="Sounds: ding when done, bong when approval needed"
               @update:model-value="setSoundAlert"
             />
             <q-toggle
@@ -405,6 +474,7 @@ export default {
       primeAudio: primeCompletionAudio,
       setDesktopEnabled,
       finished: announceCompletion,
+      needsApproval: announceApprovalNeeded,
       test: testCompletionAlerts,
     } = useAICompletionAlerts();
 
@@ -443,6 +513,42 @@ export default {
     const selectedModel = ref(null);
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
+    // --- live cost meter -----------------------------------------------------
+    // Only populated when the server says this operator's role may see spend
+    // (can_view_ai_cost, or superuser). The bridge sends nothing otherwise, so an
+    // unprivileged operator cannot infer cost from traffic either.
+    const costVisible = ref(false);
+    const sessionCost = ref(0);
+    const lastTurnCost = ref(0);
+    const costTurns = ref(0);
+    const contextTokens = ref(0);
+    const contextWindow = ref(0);
+    const costTokens = ref({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 });
+    // Dollar split per token class + per model. This is what explains a bill: one real
+    // session spent $2.25 on cacheWrite and $1.73 on cacheRead to deliver $0.61 of output.
+    const costSpend = ref(null);
+    const costPerTurn = ref(0);
+    const costByModel = ref([]);
+    const modelSwitches = ref(0);
+    const switchSpend = ref(0);
+    const pricingKnown = ref(true);
+    const contextPct = computed(() =>
+      contextWindow.value > 0
+        ? Math.min(100, Math.round((contextTokens.value / contextWindow.value) * 100))
+        : 0,
+    );
+    // Green while cheap, amber past $1, red past $5 - matches the bridge's warn bands.
+    const costColor = computed(() =>
+      sessionCost.value >= 5 ? "red-5" : sessionCost.value >= 1 ? "orange-5" : "green-5",
+    );
+    const fmtMoney = (n) =>
+      `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const fmtTokens = (n) => {
+      const v = Number(n || 0);
+      if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+      if (v >= 1e3) return `${(v / 1e3).toFixed(1)}k`;
+      return String(v);
+    };
     const readOnly = ref(false);
     const allowEmail = ref(true);
     function sendAllowEmail(val) {
@@ -697,6 +803,15 @@ export default {
               readOnly.value = !!m.read_only;
               if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
               mutateAllowed.value = !!m.mutate_allowed;
+              costVisible.value = !!m.cost_visible;
+              contextWindow.value = Number(m.context_window || 0);
+              if (m.operator_enabled && Array.isArray(m.operator_machines) && m.operator_machines.length) {
+                const names = m.operator_machines.map((x) => x.hostname || x.agent_id).filter(Boolean).join(", ");
+                messages.value.push({
+                  role: "system",
+                  text: `Desktop Operator available on: ${names}. Just tell me what to open/click/fill on that workstation (no passwords, no save/delete).`,
+                });
+              }
               maybeSeedResolve();
               // hydrate history — reconstruct the full transcript INCLUDING the
               // command window (tool calls + their output), not just the text
@@ -732,6 +847,13 @@ export default {
                   if (txt || tools.length) {
                     messages.value.push({ role: "assistant", text: txt, tools, done: true });
                   }
+                } else if (hm.role === "system") {
+                  // e.g. the "earlier turns were summarised" divider the bridge inserts
+                  // at a compaction point, so a resumed chat explains its own gap.
+                  const txt = typeof hm.content === "string"
+                    ? hm.content
+                    : (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+                  if (txt) messages.value.push({ role: "system", text: txt });
                 } else if (hm.role === "toolResult") {
                   const tool = toolById[hm.toolCallId];
                   if (tool) {
@@ -749,6 +871,14 @@ export default {
             } else if (m.type === "approval_request") {
               approvalQueue.value = [...approvalQueue.value, { id: m.id, summary: m.summary }];
               markActivity();
+              // Low bong — distinct from the bright "finished" ding — so techs notice
+              // a pending Approve without staring at the orange banner.
+              announceApprovalNeeded({
+                summary: m.summary,
+                kind: isDecision ? "decision" : "chat",
+                hostname: hostname.value,
+                key: `${curSessionId || "session"}:approval:${m.id}`,
+              });
             } else if (m.type === "autoapprove_state") {
               autoApprove.value = m.value;
             } else if (m.type === "readonly_state") {
@@ -769,8 +899,30 @@ export default {
                 text: `Switched model to ${m.display}`,
               });
               scrollToBottom();
+            } else if (m.type === "cost_update") {
+              // Running spend for this conversation (server is the only source of
+              // truth; we never compute cost in the browser).
+              sessionCost.value = Number(m.session_cost || 0);
+              lastTurnCost.value = Number(m.turn_cost || 0);
+              costTurns.value = Number(m.turns || 0);
+              contextTokens.value = Number(m.context_tokens || 0);
+              if (m.context_window) contextWindow.value = Number(m.context_window);
+              if (m.tokens) costTokens.value = m.tokens;
+              costSpend.value = m.spend || null;
+              costPerTurn.value = Number(m.cost_per_turn || 0);
+              costByModel.value = Array.isArray(m.by_model) ? m.by_model : [];
+              modelSwitches.value = Number(m.model_switches || 0);
+              switchSpend.value = Number(m.switch_spend || 0);
+              pricingKnown.value = m.pricing_known !== false;
+            } else if (m.type === "cost_warning") {
+              // An expensive turn / filling context: show it in the transcript so it
+              // is on the record, not just a toast that disappears.
+              messages.value.push({ role: "system", text: `\u26a0 ${m.message}` });
+              scrollToBottom();
             } else if (m.type === "error") {
               notifyError(m.message);
+              messages.value.push({ role: "system", text: `\u26a0 ${m.message}` });
+              scrollToBottom();
               streaming.value = false;
             }
           };
@@ -926,6 +1078,23 @@ export default {
       isDecision,
       hostname,
       clientSite,
+      costVisible,
+      sessionCost,
+      lastTurnCost,
+      costTurns,
+      contextTokens,
+      contextWindow,
+      costTokens,
+      costSpend,
+      costPerTurn,
+      costByModel,
+      modelSwitches,
+      switchSpend,
+      pricingKnown,
+      contextPct,
+      costColor,
+      fmtMoney,
+      fmtTokens,
       connectionLost,
       stalled,
       workingText,

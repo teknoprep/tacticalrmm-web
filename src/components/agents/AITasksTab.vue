@@ -156,7 +156,7 @@
           will add its own scheduled actions here while working this device's tickets.
         </template>
         <template v-else>
-          No AI tasks configured for any device in this {{ scope.kind }}.
+          No AI tasks or AI-scheduled actions for any device in this {{ scope.kind }}.
         </template>
       </div>
     </div>
@@ -708,6 +708,8 @@ export default {
         _kind: "created",
         id: "ai-" + r.id,
         _actionId: r.id,
+        // hostname column is shown in client/site scope mode
+        hostname: r.agent || r.hostname || "",
         name: r.action,
         last_status: r.status,
         last_status_rank: 5,
@@ -801,15 +803,21 @@ export default {
       } catch (e) {
         tasks.value = [];
       }
-      // AI-created scheduled actions for THIS device (agent mode only).
-      if (mode.value === "agent") {
-        try {
-          const acts = await getScheduledActions();
-          aiCreated.value = (acts || []).filter((a) => a.agent_id === selectedAgent.value);
-        } catch (e) {
+      // AI-created scheduled actions (purple "AI" rows). Shown on the device AND at
+      // client/site scope so company-wide AI-queued work is visible without drilling
+      // into each computer. Backend filters by agent/client/site the same way /ai/tasks/ does.
+      try {
+        if (mode.value === "agent") {
+          aiCreated.value = await getScheduledActions({ agent_id: selectedAgent.value });
+        } else if (mode.value === "scope") {
+          aiCreated.value = await getScheduledActions({
+            client: scope.value.client,
+            site: scope.value.site,
+          });
+        } else {
           aiCreated.value = [];
         }
-      } else {
+      } catch (e) {
         aiCreated.value = [];
       }
     }
