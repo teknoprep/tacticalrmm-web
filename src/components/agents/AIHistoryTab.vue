@@ -68,8 +68,9 @@
         :loading="loading"
         :pagination="{ rowsPerPage: 0, sortBy: 'when', descending: true }"
         hide-bottom
-        :style="{ 'max-height': tabHeight }"
+        :style="{ 'max-height': tabHeight, width: '100%' }"
         virtual-scroll
+        table-style="table-layout: fixed; width: 100%"
         @row-dblclick="onRowDblClick"
       >
         <template #body-cell-machine="props">
@@ -260,14 +261,42 @@ export default {
     const columns = computed(() => {
       const cols = [];
       if (mode.value === "scope")
-        cols.push({ name: "machine", label: "Machine", field: "machine", align: "left", sortable: true });
+        cols.push({
+          name: "machine", label: "Machine", field: "machine", align: "left", sortable: true,
+          style: "width: 140px; max-width: 140px", headerStyle: "width: 140px; max-width: 140px",
+          classes: "ellipsis",
+        });
       cols.push(
-        { name: "source", label: "Source", field: "sourceLabel", align: "left", sortable: true },
-        { name: "summary", label: "Summary", field: "summary", align: "left" },
-        { name: "user", label: "By", field: "user", align: "left" },
-        { name: "when", label: "When", field: "when", align: "left", sortable: true, classes: "no-wrap" },
-        { name: "status", label: "Status", field: "status", align: "left" },
-        { name: "actions", label: "", field: "actions", align: "right", classes: "no-wrap" },
+        {
+          name: "source", label: "Source", field: "sourceLabel", align: "left", sortable: true,
+          style: "width: 130px; max-width: 130px", headerStyle: "width: 130px; max-width: 130px",
+        },
+        {
+          // Flexible filler column — must ellipsize so the table never grows wider than the pane
+          name: "summary", label: "Summary", field: "summary", align: "left",
+          style: "width: auto; max-width: 0", // max-width:0 + table-layout:fixed forces ellipsis
+          headerStyle: "width: auto",
+          classes: "ai-summary-col",
+        },
+        {
+          name: "user", label: "By", field: "user", align: "left",
+          style: "width: 110px; max-width: 110px", headerStyle: "width: 110px; max-width: 110px",
+          classes: "ellipsis",
+        },
+        {
+          name: "when", label: "When", field: "when", align: "left", sortable: true,
+          style: "width: 150px; max-width: 150px", headerStyle: "width: 150px; max-width: 150px",
+          classes: "no-wrap",
+        },
+        {
+          name: "status", label: "Status", field: "status", align: "left",
+          style: "width: 90px; max-width: 90px", headerStyle: "width: 90px; max-width: 90px",
+        },
+        {
+          name: "actions", label: "", field: "actions", align: "right",
+          style: "width: 160px; max-width: 160px", headerStyle: "width: 160px; max-width: 160px",
+          classes: "no-wrap",
+        },
       );
       return cols;
     });
@@ -309,8 +338,11 @@ export default {
         run_id: r.run_id,
         agentId: r.device_id || null,
         machine: r.hostname || "",
-        source: r.source, // 'task' | 'bulk'
-        sourceLabel: r.source === "bulk" ? `Bulk: ${r.source_name}` : `Task: ${r.source_name}`,
+        source: r.source, // 'task' | 'bulk' | 'scheduled'
+        sourceLabel:
+          r.source === "bulk" ? `Bulk: ${r.source_name}`
+          : r.source === "scheduled" ? `Scheduled: ${r.source_name}`
+          : `Task: ${r.source_name}`,
         summary: r.summary || "(running…)",
         user: r.triggered_by || "",
         when: r.started_at,
@@ -425,21 +457,35 @@ export default {
 </script>
 
 <style scoped>
-/* keep rows single-line so the table width is stable and the horizontal
-   scrollbar (when needed) is always present and reachable */
-.ai-history-table :deep(td) {
+/* Fit the pane: never force horizontal scroll. Fixed layout + ellipsis on Summary. */
+.ai-history-table {
+  width: 100%;
+  max-width: 100%;
+}
+.ai-history-table :deep(table) {
+  table-layout: fixed;
+  width: 100%;
+}
+.ai-history-table :deep(td),
+.ai-history-table :deep(th) {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ai-history-table :deep(tbody tr) {
   cursor: pointer;
 }
 .ai-history-table :deep(.q-table__middle) {
-  overflow: auto;
+  /* vertical scroll only — horizontal scroll is never wanted here */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
-.ai-summary-cell {
-  max-width: 420px;
+.ai-summary-cell,
+.ai-history-table :deep(td.ai-summary-col),
+.ai-history-table :deep(.ai-summary-col) {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pi-run-card {
   width: 900px;

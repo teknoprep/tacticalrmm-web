@@ -1,6 +1,6 @@
 <template>
-  <div style="height: 100vh; display: flex; flex-direction: column; background: #f5f5f5; padding: 6px; box-sizing: border-box">
-    <q-card flat bordered style="width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0">
+  <div class="proc-root">
+    <q-card flat bordered class="proc-card">
       <q-card-section class="bg-primary text-white row items-center q-py-sm">
         <q-icon name="menu_book" size="sm" class="q-mr-sm" />
         <div class="text-subtitle1">Pi.dev AI — Procedures</div>
@@ -71,7 +71,7 @@
       </div>
       <q-separator />
 
-      <div style="flex: 1; min-height: 0; overflow: auto">
+      <div class="proc-table-wrap">
         <q-table
           ref="procTable"
           v-model:pagination="pagination"
@@ -84,8 +84,19 @@
           hide-bottom
           separator="horizontal"
           class="proc-table"
+          table-style="table-layout: fixed; width: 100%"
+          style="width: 100%"
+          virtual-scroll
           @row-dblclick="(e, row) => openEdit(row)"
         >
+          <template #body-cell-title="props">
+            <q-td :props="props" class="proc-ellipsis">
+              {{ props.row.title }}
+              <q-tooltip v-if="(props.row.title || '').length > 40" max-width="480px" :delay="250">
+                {{ props.row.title }}
+              </q-tooltip>
+            </q-td>
+          </template>
           <template #body-cell-confidence="props">
             <q-td :props="props">
               <q-badge :color="confColor(props.value)" :label="props.value" />
@@ -302,16 +313,52 @@ export default defineComponent({
     let headTimer = null;
 
     const columns = [
-      { name: "code", label: "ID", field: "code", align: "left", sortable: true },
-      { name: "title", label: "Title", field: "title", align: "left", sortable: true },
-      { name: "category", label: "Category", field: "category", align: "left", sortable: true },
-      { name: "applies_to", label: "Applies to", field: "applies_to", align: "left" },
-      { name: "occurrence_count", label: "Seen", field: "occurrence_count", align: "center", sortable: true },
-      { name: "confidence", label: "Confidence", field: "confidence", align: "center", sortable: true },
-      { name: "status", label: "Status", field: "status", align: "center", sortable: true },
-      { name: "updated", label: "Updated", field: "updated", align: "left", sortable: true,
-        format: (v) => (v ? new Date(v).toLocaleString() : "") },
-      { name: "actions", label: "", field: "actions", align: "right" },
+      {
+        // Never truncate — IDs must stay fully readable
+        name: "code", label: "ID", field: "code", align: "left", sortable: true,
+        style: "width: 88px; white-space: nowrap", headerStyle: "width: 88px; white-space: nowrap",
+        classes: "proc-notrunc",
+      },
+      {
+        // Flexible filler — only Title may ellipsize
+        name: "title", label: "Title", field: "title", align: "left", sortable: true,
+        style: "width: auto; max-width: 0", headerStyle: "width: auto",
+        classes: "proc-ellipsis-col",
+      },
+      {
+        // Never truncate
+        name: "category", label: "Category", field: "category", align: "left", sortable: true,
+        style: "width: 160px; white-space: nowrap", headerStyle: "width: 160px; white-space: nowrap",
+        classes: "proc-notrunc",
+      },
+      // applies_to is editor-only — not shown in the list
+      {
+        name: "occurrence_count", label: "Seen", field: "occurrence_count", align: "center", sortable: true,
+        style: "width: 64px; white-space: nowrap", headerStyle: "width: 64px",
+        classes: "proc-notrunc",
+      },
+      {
+        name: "confidence", label: "Conf.", field: "confidence", align: "center", sortable: true,
+        style: "width: 88px; white-space: nowrap", headerStyle: "width: 88px",
+        classes: "proc-notrunc",
+      },
+      {
+        name: "status", label: "Status", field: "status", align: "center", sortable: true,
+        style: "width: 96px; white-space: nowrap", headerStyle: "width: 96px",
+        classes: "proc-notrunc",
+      },
+      {
+        // Never truncate date/time
+        name: "updated", label: "Updated", field: "updated", align: "left", sortable: true,
+        style: "width: 170px; white-space: nowrap", headerStyle: "width: 170px; white-space: nowrap",
+        classes: "proc-notrunc",
+        format: (v) => (v ? new Date(v).toLocaleString() : ""),
+      },
+      {
+        name: "actions", label: "", field: "actions", align: "right",
+        style: "width: 120px; white-space: nowrap", headerStyle: "width: 120px",
+        classes: "proc-notrunc",
+      },
     ];
 
     const confColor = (c) => ({ high: "green", medium: "orange", low: "grey" }[c] || "grey");
@@ -488,6 +535,75 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.proc-root {
+  height: 100vh;
+  width: 100%;
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background: #f5f5f5;
+  padding: 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.proc-card {
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Fill the popup/window; never force awkward horizontal overflow */
+.proc-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.proc-table {
+  width: 100%;
+  max-width: 100%;
+}
+.proc-table :deep(table) {
+  table-layout: fixed;
+  width: 100%;
+}
+.proc-table :deep(.q-table__middle) {
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+.proc-table :deep(td),
+.proc-table :deep(th) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proc-table :deep(tbody tr) {
+  cursor: pointer;
+}
+.proc-ellipsis,
+.proc-table :deep(td.proc-ellipsis-col),
+.proc-table :deep(.proc-ellipsis-col) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 0;
+}
+/* ID / Category / Updated / badges — always fully visible */
+.proc-table :deep(td.proc-notrunc),
+.proc-table :deep(th.proc-notrunc),
+.proc-table :deep(.proc-notrunc) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  max-width: none;
+}
+
 /* readable, aligned labels above each multi-line field */
 .proc-label {
   font-size: 12px;
@@ -499,10 +615,6 @@ export default defineComponent({
 :deep(.q-textarea .q-field__native) {
   font-size: 13.5px;
   line-height: 1.5;
-}
-/* rows are double-clickable to open */
-.proc-table :deep(tbody tr) {
-  cursor: pointer;
 }
 /* live mining log */
 .mining-log {

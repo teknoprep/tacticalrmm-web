@@ -78,21 +78,63 @@ export async function saveAIAutoApprove(value) {
 }
 
 // Pi.dev AI assistant
+// Open a Pi chat popup at a GUARANTEED size.
+//
+// Why not Quasar's openURL(): it force-injects `noopener` (see quasar/src/utils/open-url),
+// which makes window.open() return null, so the caller can never correct the geometry
+// afterwards. That matters because Chrome REMEMBERS the bounds of the last popup a user
+// resized for an origin and silently ignores the width/height passed to window.open() for
+// later popups - so simply raising the number in the features string does nothing once
+// anyone has resized a Pi chat window. We open it directly (same-origin, so omitting
+// noopener is safe) and then resizeTo() to override the remembered bounds.
+function openPiWindow(url, width = 1500, height = 900) {
+  // Never ask for more than the screen actually has, or the window lands off-screen.
+  const scr = window.screen || {};
+  const w = Math.min(width, scr.availWidth || width);
+  const h = Math.min(height, scr.availHeight || height);
+  // Centring matters: Chrome is far more willing to honour width/height when an explicit
+  // position is supplied too, and without it a forced resize can push the window off-screen.
+  const left = Math.max(0, Math.round(((scr.availWidth || w) - w) / 2) + (scr.availLeft || 0));
+  const top = Math.max(0, Math.round(((scr.availHeight || h) - h) / 2) + (scr.availTop || 0));
+  const features =
+    "popup=yes,scrollbars=yes,location=no,status=no,toolbar=no,menubar=no," +
+    `width=${w},height=${h},left=${left},top=${top}`;
+
+  const win = window.open(url, "_blank", features);
+  if (!win) return null; // blocked by a popup blocker
+
+  // Chrome REMEMBERS the bounds of the last popup a user resized for an origin and
+  // re-applies them, sometimes AFTER the open call returns - so a single resizeTo() on the
+  // same tick can be silently undone. Reassert the geometry a few times: immediately, on
+  // load, and once more shortly after. Cheap, idempotent, and stops when it has taken.
+  const enforce = () => {
+    try {
+      if (win.closed) return;
+      if (Math.abs(win.outerWidth - w) > 20 || Math.abs(win.outerHeight - h) > 20) {
+        win.resizeTo(w, h);
+        win.moveTo(left, top);
+      }
+    } catch (e) {
+      /* browser refused; the features string above is the fallback */
+    }
+  };
+
+  enforce();
+  try {
+    win.addEventListener("load", enforce, { once: true });
+  } catch (e) { /* not yet navigable */ }
+  setTimeout(enforce, 150);
+  setTimeout(enforce, 600);
+  try { win.focus(); } catch (e) { /* ignore */ }
+  return win;
+}
+
 export function runPiChat(agent_id, query = {}) {
   const url = router.resolve({
     path: `/pichat/${agent_id}`,
     query,
   }).href;
-  openURL(url, null, {
-    popup: true,
-    scrollbars: true,
-    location: false,
-    status: false,
-    toolbar: false,
-    menubar: false,
-    width: 1200,
-    height: 900,
-  });
+  openPiWindow(url);
 }
 
 export async function createPiSession(agent_id, payload = {}) {
@@ -119,16 +161,7 @@ export function runPiMultiChat(machines, query = {}) {
     path: "/pichat/multi",
     query: { m: encodePiMachines(machines), ...query },
   }).href;
-  openURL(url, null, {
-    popup: true,
-    scrollbars: true,
-    location: false,
-    status: false,
-    toolbar: false,
-    menubar: false,
-    width: 1200,
-    height: 900,
-  });
+  openPiWindow(url);
 }
 
 export async function fetchPiHistory(agent_id) {

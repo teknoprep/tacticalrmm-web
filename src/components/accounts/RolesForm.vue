@@ -167,6 +167,17 @@
                   normal scope. Superusers always have this.
                 </q-tooltip>
               </q-checkbox>
+              <q-checkbox
+                v-model="localRole.can_view_ai_cost"
+                label="View AI cost meter (token & spend)"
+              >
+                <q-tooltip>
+                  Shows the live cost meter in Pi Chat and the AI Decision window:
+                  what the current conversation has spent, tokens used, and how full
+                  the model's context is. Visibility only &mdash; it grants no AI
+                  capability. Superusers always have this.
+                </q-tooltip>
+              </q-checkbox>
             </div>
             <q-select
               v-model="localRole.ai_allowed_models"
@@ -540,6 +551,7 @@ export default {
           can_use_ai_mutate: false,
           can_use_ai_autoapprove: false,
           can_manage_all_ai_tasks: false,
+          can_view_ai_cost: false,
           ai_allowed_models: [],
           can_uninstall_agents: false,
           can_update_agents: false,

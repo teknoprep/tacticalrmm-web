@@ -31,6 +31,8 @@ export function useAICompletionAlerts() {
 
   let audioContext = null;
   let lastCompletionKey = null;
+  let lastApprovalKey = null;
+  let lastApprovalSoundAt = 0;
 
   watch(
     [soundEnabled, desktopEnabled, onlyWhenUnfocused],
@@ -83,8 +85,7 @@ export function useAICompletionAlerts() {
     }
   }
 
-  function playDing({ force = false } = {}) {
-    if (!force && !soundEnabled.value) return;
+  function playToneSequence(notes, { peak = 0.16, release = 0.42 } = {}) {
     try {
       const ctx = getAudioContext();
       if (!ctx) return;
@@ -92,17 +93,13 @@ export function useAICompletionAlerts() {
         const start = ctx.currentTime;
         const gain = ctx.createGain();
         gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
+        gain.gain.exponentialRampToValueAtTime(peak, start + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + release);
         gain.connect(ctx.destination);
 
-        // A short, friendly two-note completion chime with no external audio asset.
-        [
-          { frequency: 880, offset: 0, duration: 0.16 },
-          { frequency: 1174.66, offset: 0.14, duration: 0.27 },
-        ].forEach(({ frequency, offset, duration }) => {
+        notes.forEach(({ frequency, offset, duration, type = "sine" }) => {
           const oscillator = ctx.createOscillator();
-          oscillator.type = "sine";
+          oscillator.type = type;
           oscillator.frequency.setValueAtTime(frequency, start + offset);
           oscillator.connect(gain);
           oscillator.start(start + offset);
@@ -114,6 +111,40 @@ export function useAICompletionAlerts() {
     } catch (e) {
       // Never let an unavailable audio device affect the chat session.
     }
+  }
+
+  function playDing({ force = false } = {}) {
+    if (!force && !soundEnabled.value) return;
+    // Short, friendly two-note completion chime (high).
+    playToneSequence(
+      [
+        { frequency: 880, offset: 0, duration: 0.16 },
+        { frequency: 1174.66, offset: 0.14, duration: 0.27 },
+      ],
+      { peak: 0.16, release: 0.42 },
+    );
+  }
+
+  // Low "bong/dong" when the operator must hit Approve — distinct from the
+  // bright completion ding so it cuts through even if the tab is in the background.
+  function playApprovalBong({ force = false } = {}) {
+    if (!force && !soundEnabled.value) return;
+    const now = Date.now();
+    // Parallel multi-machine turns can raise several approvals at once; don't
+    // machine-gun the speaker — one bong per ~700ms is enough to pull attention.
+    if (!force && now - lastApprovalSoundAt < 700) return;
+    lastApprovalSoundAt = now;
+    playToneSequence(
+      [
+        // Fundamental + a soft octave for body (triangle = rounder/bassier than sine).
+        { frequency: 98, offset: 0, duration: 0.55, type: "triangle" },
+        { frequency: 196, offset: 0.02, duration: 0.4, type: "sine" },
+        // Second "dong" a fifth up, slightly delayed.
+        { frequency: 130.81, offset: 0.28, duration: 0.55, type: "triangle" },
+        { frequency: 261.63, offset: 0.3, duration: 0.35, type: "sine" },
+      ],
+      { peak: 0.22, release: 0.85 },
+    );
   }
 
   async function setDesktopEnabled(value) {
@@ -150,7 +181,7 @@ export function useAICompletionAlerts() {
     try {
       const notification = new window.Notification(title, {
         body,
-        tag: `trmm-ai-complete-${key}`,
+        tag: `trmm-ai-alert-${key}`,
         renotify: false,
       });
       notification.onclick = () => {
@@ -178,11 +209,36 @@ export function useAICompletionAlerts() {
     showDesktopNotification({ title, body, key: lastCompletionKey });
   }
 
+  function needsApproval({ summary, key, kind, hostname } = {}) {
+    if (key && key === lastApprovalKey) return;
+    lastApprovalKey = key || `approval-${Date.now()}`;
+
+    const isDecision = kind === "decision";
+    const title = isDecision ? "AI needs approval" : "Pi Chat needs approval";
+    const snippet = String(summary || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 160);
+    const body = snippet
+      ? `Approve to continue: ${snippet}`
+      : `The AI is waiting for approval${hostname ? ` (${hostname})` : ""}.`;
+
+    playApprovalBong();
+    showDesktopNotification({
+      title,
+      body,
+      key: lastApprovalKey,
+      force: false,
+    });
+  }
+
   function test() {
     playDing({ force: true });
+    // Brief gap so both tones are audible as distinct sounds.
+    setTimeout(() => playApprovalBong({ force: true }), 500);
     showDesktopNotification({
       title: "AI completion alerts",
-      body: "The completion ding and desktop notification are working.",
+      body: "Completion ding + approval bong (and desktop notification) are working.",
       key: `test-${Date.now()}`,
       force: desktopEnabled.value,
     });
@@ -198,6 +254,7 @@ export function useAICompletionAlerts() {
     primeAudio,
     setDesktopEnabled,
     finished,
+    needsApproval,
     test,
   };
 }

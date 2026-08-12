@@ -212,6 +212,7 @@
               label="Include assigned tickets"
             />
             <q-toggle
+              v-if="form.kind !== 'ai_spend'"
               class="col-6"
               dense
               v-model="optAiSummary"
@@ -224,7 +225,59 @@
               "
             />
           </div>
-          <div class="text-caption text-grey q-mb-md">
+          <!-- AI Spend: pick the breakdowns and (optionally) narrow to one client/tech/model -->
+          <template v-if="form.kind === 'ai_spend'">
+            <q-select
+              v-model="optSpendGroups"
+              :options="spendGroupOptions"
+              emit-value
+              map-options
+              multiple
+              use-chips
+              dense
+              outlined
+              label="Break the spend down by"
+              class="q-mb-sm"
+            />
+            <div class="row q-col-gutter-sm q-mb-sm">
+              <q-select
+                v-model="optSpendSurface"
+                :options="surfaceFilterOptions"
+                emit-value
+                map-options
+                dense
+                outlined
+                label="Only this surface"
+                class="col-6"
+              />
+              <q-input
+                v-model.number="optSpendTopRows"
+                type="number"
+                dense
+                outlined
+                label="Rows per breakdown"
+                class="col-6"
+              />
+            </div>
+            <div class="row q-col-gutter-sm q-mb-sm">
+              <q-input v-model="optSpendClient" dense outlined label="Only this client" class="col-4" />
+              <q-input v-model="optSpendUser" dense outlined label="Only this technician" class="col-4" />
+              <q-input v-model="optSpendModel" dense outlined label="Only this model" class="col-4" />
+            </div>
+            <q-toggle
+              dense
+              v-model="optSpendSendEmpty"
+              label="Send even when there was no spend"
+              class="q-mb-sm"
+            />
+            <div class="text-caption text-grey q-mb-md">
+              Every figure comes from the spend ledger &mdash; the cost the AI runtime itself
+              reported for each billed turn. Nothing is re-priced, so a provider changing its
+              prices never moves a past report. Leave the filters blank for everything.
+            </div>
+          </template>
+
+          <div v-if="form.kind !== 'ai_spend'" class="text-caption text-grey q-mb-md">
             {{
               form.kind === "activity"
                 ? "Figures are always computed in code; the model only interprets them. Off still sends the report."
@@ -325,6 +378,7 @@ export default {
         label: "Technician Productivity Analysis — how each tech is doing",
         value: "tech_productivity",
       },
+      { label: "AI Spend — what the AI cost", value: "ai_spend" },
     ];
     const cadenceOptions = [
       { label: "Every day", value: "daily" },
@@ -365,6 +419,57 @@ export default {
       get: () => form.value.options?.ai_audit !== false,
       set: (v) => { form.value.options = { ...(form.value.options || {}), ai_audit: v }; },
     });
+    // --- AI Spend options -------------------------------------------------------
+    // Which breakdowns the email contains. Defaults answer "how much, on what, by whom,
+    // and where did it go" without the operator having to think about it.
+    const spendGroupOptions = [
+      { label: "Day", value: "day" },
+      { label: "Client", value: "client" },
+      { label: "Technician", value: "user" },
+      { label: "Model", value: "model" },
+      { label: "Surface (chat / ticket / unattended)", value: "surface" },
+      { label: "Ticket", value: "ticket" },
+    ];
+    const optSpendGroups = computed({
+      get: () => form.value.options?.group_by || ["day", "client", "model", "user"],
+      set: (v) => {
+        form.value.options = { ...(form.value.options || {}), group_by: v };
+      },
+    });
+    const optSpendTopRows = computed({
+      get: () => form.value.options?.top_rows ?? 15,
+      set: (v) => {
+        form.value.options = { ...(form.value.options || {}), top_rows: Number(v) || 15 };
+      },
+    });
+    const optSpendSendEmpty = computed({
+      get: () => form.value.options?.send_when_empty === true,
+      set: (v) => { form.value.options = { ...(form.value.options || {}), send_when_empty: v }; },
+    });
+    // Optional narrowing, e.g. one client's spend or one model's spend.
+    const optSpendClient = computed({
+      get: () => form.value.options?.client || "",
+      set: (v) => { form.value.options = { ...(form.value.options || {}), client: v }; },
+    });
+    const optSpendUser = computed({
+      get: () => form.value.options?.user || "",
+      set: (v) => { form.value.options = { ...(form.value.options || {}), user: v }; },
+    });
+    const optSpendModel = computed({
+      get: () => form.value.options?.model || "",
+      set: (v) => { form.value.options = { ...(form.value.options || {}), model: v }; },
+    });
+    const optSpendSurface = computed({
+      get: () => form.value.options?.surface || "",
+      set: (v) => { form.value.options = { ...(form.value.options || {}), surface: v }; },
+    });
+    const surfaceFilterOptions = [
+      { label: "All surfaces", value: "" },
+      { label: "Device chat (Pi Chat)", value: "device_chat" },
+      { label: "Ticket chat (AI Decision)", value: "decision_chat" },
+      { label: "Unattended runs", value: "unattended" },
+    ];
+
     const optPromptExtra = computed({
       get: () => form.value.options?.prompt_extra || "",
       set: (v) => { form.value.options = { ...(form.value.options || {}), prompt_extra: v }; },
@@ -490,6 +595,8 @@ export default {
       schedules, loading, saving, editing, form, columns,
       kindOptions, cadenceOptions, weekdayOptions,
       optAllTeams, optIncludeAssigned, optAiSummary, optAiAudit, optPrompt, optPromptExtra,
+      spendGroupOptions, optSpendGroups, optSpendTopRows, optSpendSendEmpty,
+      optSpendClient, optSpendUser, optSpendModel, optSpendSurface, surfaceFilterOptions,
       windowOptions, windowPreset,
       openEditor, save, toggle, remove, runNow,
       cadenceText, windowText, defaultWindowText, formatDate,

@@ -154,10 +154,19 @@ export async function helpdeskAssist(messages: { role: string; content: string }
   return data as { reply: string };
 }
 
-export async function getScheduledActions() {
-  const { data } = await axios.get(`${baseUrl}/ai/schedule-action/`);
+export async function getScheduledActions(scope?: {
+  agent_id?: string | null;
+  client?: string | null;
+  site?: string | null;
+}) {
+  const params: Record<string, string> = {};
+  if (scope?.agent_id) params.agent_id = scope.agent_id;
+  else if (scope?.site) params.site = scope.site;
+  else if (scope?.client) params.client = scope.client;
+  const { data } = await axios.get(`${baseUrl}/ai/schedule-action/`, { params });
   return data as {
     id: number; ticket_ref: string; agent: string | null; agent_id: string | null;
+    hostname?: string | null; client?: string | null; site?: string | null;
     action: string; run_at: string; status: string; allow_mutating: boolean;
     created_by: string; result: string;
   }[];
@@ -537,3 +546,7 @@ export async function runAIReportScheduleNow(id: number) {
   const { data } = await axios.post(`/core/ai/report-schedules/${id}/`);
   return data as string;
 }
+
+// --- AI spend ledger report ---------------------------------------------------
+// NOTE: AI Spend is a SCHEDULED REPORT kind (see AIReportSchedules), not a separate
+// screen. The /core/ai/spend-report/ endpoint remains available for ad-hoc queries.
