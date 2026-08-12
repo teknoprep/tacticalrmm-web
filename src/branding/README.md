@@ -79,3 +79,46 @@ It does not add, unlock or re-enable any EE feature, and it does not touch integ
 registration or licensing code. If a feature is absent from the bundle Amidaware served,
 this tooling leaves it absent. The EE licence forbids working around that, and doing so
 would misrepresent what has been paid for.
+
+## WHICH BUNDLE IS DEPLOYED (decided 2026-08-12)
+
+**A source build from this repo.** Chosen deliberately, with the trade-off understood.
+
+There are two possible bundles and neither has everything:
+
+| | source build (deployed) | official webtar |
+|---|---|---|
+| Network Devices, PiChat, AI Ticket Console, AI Procedures | yes | **no** |
+| EE Reporting Manager UI | **no** | yes |
+
+The official webtar is Amidaware's build. It carries the Tier 2 EE Reporting UI, and it
+knows nothing about our custom views, because those exist only in this repo. A source
+build is the reverse.
+
+The custom views are used daily; Reporting was not in the Aug 4 build either, so nothing
+was lost by choosing this side. Reporting was requested and then withdrawn once the cost
+was clear.
+
+If Reporting is ever wanted back, the honest options are: ask Amidaware how a sponsor
+builds from source with EE included, or run the official webtar and lose the custom views.
+Registering EE features by hand in src/boot/integrations.ts is NOT one of the options --
+the EE licence prohibits working around that mechanism, whatever the sponsorship tier.
+
+Note that report DATA is untouched by any of this: 20 report templates and the six AI
+report schedules live in the database and the schedules run server-side, so they keep
+working whichever bundle is deployed.
+
+## Deploying a source build
+
+    npx quasar build
+    sudo rm -rf /var/www/rmm/dist && sudo mkdir -p /var/www/rmm/dist
+    sudo cp -a dist/. /var/www/rmm/dist/
+    echo 'window._env_ = {PROD_URL: "https://api.blueuc.com"}' \
+      | sudo tee /var/www/rmm/dist/env-config.js >/dev/null
+    sudo chown -R www-data:www-data /var/www/rmm/dist && sudo systemctl reload nginx
+
+`env-config.js` is written by update.sh, NOT by the build. Forgetting it leaves the
+frontend with no API URL. Do not skip that line.
+
+`apply-to-dist.py` is only for the official webtar. A source build already contains the
+brand, since it imports this module.
