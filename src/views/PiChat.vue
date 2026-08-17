@@ -12,6 +12,36 @@
         </div>
       </div>
       <q-space />
+      <!-- SESSION LABEL. The technician's own name for this conversation, so AI History
+           can be searched by what the work WAS. The generated name ("Chat about PBX3")
+           and the last-message snippet are enough to find a session from ten minutes ago
+           and useless for finding the one from Tuesday. Saved on blur/Enter, not on every
+           keystroke, so typing does not chatter over the socket. -->
+      <q-input
+        v-model="sessionLabel"
+        dense
+        dark
+        outlined
+        clearable
+        placeholder="Label this chat"
+        class="q-mr-sm"
+        style="min-width: 190px; max-width: 260px"
+        :maxlength="120"
+        data-test="ai-session-label"
+        @blur="sendLabel"
+        @keyup.enter="sendLabel"
+        @clear="sendLabel"
+      >
+        <template #prepend>
+          <q-icon name="label" size="xs" />
+        </template>
+        <q-tooltip>
+          Your own name for this conversation (e.g. "ACD clone UI", "Jeremy archive").
+          It shows in the AI History tab and in this window's title, so you can find
+          this chat later. Saved when you press Enter or click away; clear it to go
+          back to the generated name.
+        </q-tooltip>
+      </q-input>
       <!-- Running cost meter. Rendered only when the role carries can_view_ai_cost
            (or superuser); the server withholds the data entirely otherwise. -->
       <q-chip
@@ -575,6 +605,26 @@ export default {
     // server-side on every toggle and every credential read.
     const autocredentialAllowed = ref(false);
     const autoCredential = ref(false);
+    // Technician's own name for this conversation. Mirrored into the window title so a
+    // desktop full of Pi popups is navigable, and into AI History so it is findable later.
+    const sessionLabel = ref("");
+    let lastSentLabel = "";
+    function sendLabel() {
+      const val = (sessionLabel.value || "").replace(/\s+/g, " ").trim().slice(0, 120);
+      sessionLabel.value = val;
+      // Only talk to the server when it actually changed: blur fires on every click away.
+      if (val === lastSentLabel) return;
+      lastSentLabel = val;
+      if (ws && connected.value) ws.send(JSON.stringify({ type: "set_label", value: val }));
+      applyWindowTitle();
+    }
+    function applyWindowTitle() {
+      const who = hostname.value || (isMulti ? "multi-machine" : agentId || "");
+      const base = `Pi.dev - ${who}`;
+      try {
+        document.title = sessionLabel.value ? `${sessionLabel.value} - ${base}` : base;
+      } catch (e) { /* title is a nicety, never a failure */ }
+    }
     const mutateAllowed = ref(false);
     const resolveRun = route.query.resolve_run || null;
     let resolveSeeded = false;
@@ -827,6 +877,13 @@ export default {
               if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
               if (m.autocredential_allowed !== undefined) autocredentialAllowed.value = !!m.autocredential_allowed;
               if (m.auto_credential !== undefined) autoCredential.value = !!m.auto_credential;
+              // A resumed chat keeps the label it was given, so "Continue" from AI History
+              // lands in a window that still knows what it is.
+              if (m.label !== undefined) {
+                sessionLabel.value = String(m.label || "");
+                lastSentLabel = sessionLabel.value;
+              }
+              applyWindowTitle();
               mutateAllowed.value = !!m.mutate_allowed;
               costVisible.value = !!m.cost_visible;
               contextWindow.value = Number(m.context_window || 0);
@@ -906,6 +963,10 @@ export default {
               });
             } else if (m.type === "autoapprove_state") {
               autoApprove.value = m.value;
+            } else if (m.type === "label_state") {
+              sessionLabel.value = String(m.value || "");
+              lastSentLabel = sessionLabel.value;
+              applyWindowTitle();
             } else if (m.type === "autocredential_state") {
               // The server is authoritative: if the role does not carry the permission it
               // comes back false, and the switch snaps back rather than lying to the tech.
@@ -1166,6 +1227,8 @@ export default {
       autocredentialAllowed,
       autoCredential,
       sendAutoCredential,
+      sessionLabel,
+      sendLabel,
       mutateAllowed,
       setReadonly,
       pendingApproval,
