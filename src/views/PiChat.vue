@@ -120,6 +120,22 @@
         @update:model-value="sendAutoApprove"
       />
       <q-toggle
+        v-if="isDecision && autocredentialAllowed"
+        v-model="autoCredential"
+        dense
+        color="purple"
+        label="Auto-credential"
+        class="q-mr-sm"
+        @update:model-value="sendAutoCredential"
+      >
+        <q-tooltip>
+          Let Pi look up a stored IT Notebook login (username/password) for this
+          customer without stopping to ask you each time. Separate from Auto-approve
+          on purpose. PRIVILEGED rows still ask you every time, and every automatic
+          lookup is written to the audit log.
+        </q-tooltip>
+      </q-toggle>
+      <q-toggle
         v-if="isDecision"
         v-model="allowEmail"
         dense
@@ -442,6 +458,7 @@ import { getBaseUrl } from "@/boot/axios";
 import {
   createPiSession,
   saveAIAutoApprove,
+  saveAIAutoCredential,
   createPiMultiSession,
   decodePiMachines,
   encodePiMachines,
@@ -554,6 +571,10 @@ export default {
     function sendAllowEmail(val) {
       if (ws && connected.value) ws.send(JSON.stringify({ type: "set_allow_email", value: !!val }));
     }
+    // Auto-credential: shown only when the role carries the permission, and re-checked
+    // server-side on every toggle and every credential read.
+    const autocredentialAllowed = ref(false);
+    const autoCredential = ref(false);
     const mutateAllowed = ref(false);
     const resolveRun = route.query.resolve_run || null;
     let resolveSeeded = false;
@@ -771,6 +792,8 @@ export default {
           // The server remembers the operator's Auto-approve choice; render THAT rather
           // than defaulting to off, or a refresh looks like the setting silently died.
           if (data.auto_approve !== undefined) autoApprove.value = !!data.auto_approve;
+          autocredentialAllowed.value = !!data.autocredential_allowed;
+          if (data.auto_credential !== undefined) autoCredential.value = !!data.auto_credential;
 
           const url = `${wsBase()}/pi/ws/${data.token}/`;
           ws = new WebSocket(url);
@@ -802,6 +825,8 @@ export default {
               curSessionId = m.session_id || curSessionId;
               readOnly.value = !!m.read_only;
               if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
+              if (m.autocredential_allowed !== undefined) autocredentialAllowed.value = !!m.autocredential_allowed;
+              if (m.auto_credential !== undefined) autoCredential.value = !!m.auto_credential;
               mutateAllowed.value = !!m.mutate_allowed;
               costVisible.value = !!m.cost_visible;
               contextWindow.value = Number(m.context_window || 0);
@@ -881,6 +906,17 @@ export default {
               });
             } else if (m.type === "autoapprove_state") {
               autoApprove.value = m.value;
+            } else if (m.type === "autocredential_state") {
+              // The server is authoritative: if the role does not carry the permission it
+              // comes back false, and the switch snaps back rather than lying to the tech.
+              autoCredential.value = !!m.value;
+              messages.value.push({
+                role: "system",
+                text: m.value
+                  ? "Auto-credential ON — Pi may use stored IT Notebook logins for this customer without asking each time. Privileged rows still ask you every time, and every lookup is audited."
+                  : "Auto-credential OFF — Pi must ask you before reading any stored credential.",
+              });
+              scrollToBottom();
             } else if (m.type === "readonly_state") {
               readOnly.value = m.value;
             } else if (m.type === "allow_email_state") {
@@ -984,6 +1020,13 @@ export default {
         }
       }
       approvalQueue.value = [];
+    }
+
+    function sendAutoCredential(val) {
+      if (ws) ws.send(JSON.stringify({ type: "set_autocredential", value: !!val }));
+      saveAIAutoCredential(!!val).catch(() => {
+        notifyError("Auto-credential is set for this window, but could not be saved as your default.");
+      });
     }
 
     function sendAutoApprove(val) {
@@ -1120,6 +1163,9 @@ export default {
       readOnly,
       allowEmail,
       sendAllowEmail,
+      autocredentialAllowed,
+      autoCredential,
+      sendAutoCredential,
       mutateAllowed,
       setReadonly,
       pendingApproval,

@@ -77,6 +77,17 @@ export async function saveAIAutoApprove(value) {
   return data;
 }
 
+// Remembered Auto-credential preference. Same reasoning as Auto-approve: the choice
+// belongs to the person, not to one socket, so it survives refreshes and second windows.
+// The PERMISSION is still the role's (can_use_ai_autocredential) and is re-checked on the
+// server every time - remembering a preference can never grant it.
+export async function saveAIAutoCredential(value) {
+  const { data } = await axios.patch("/accounts/users/ui/", {
+    ai_autocredential_default: !!value,
+  });
+  return data;
+}
+
 // Pi.dev AI assistant
 // Open a Pi chat popup at a GUARANTEED size.
 //

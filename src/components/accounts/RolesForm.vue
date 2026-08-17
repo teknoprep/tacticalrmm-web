@@ -158,6 +158,19 @@
                 label="Allow auto-approve of device actions"
               />
               <q-checkbox
+                v-model="localRole.can_use_ai_autocredential"
+                label="Allow auto-credential (stored IT Notebook logins)"
+              >
+                <q-tooltip>
+                  Lets this role switch on Auto-credential in an AI window, so Pi can
+                  use a stored IT Notebook login without stopping to ask for each
+                  retrieval. Separate from auto-approve on purpose: approving a device
+                  change and handing over a live password are different decisions.
+                  PRIVILEGED rows are never covered &mdash; they ask a human every time
+                  &mdash; and every automatic read is still written to the audit log.
+                </q-tooltip>
+              </q-checkbox>
+              <q-checkbox
                 v-model="localRole.can_manage_all_ai_tasks"
                 label="Manage/delete all AI tasks & bulk commands (any owner)"
               >
@@ -550,6 +563,7 @@ export default {
           can_use_ai: false,
           can_use_ai_mutate: false,
           can_use_ai_autoapprove: false,
+          can_use_ai_autocredential: false,
           can_manage_all_ai_tasks: false,
           can_view_ai_cost: false,
           ai_allowed_models: [],
