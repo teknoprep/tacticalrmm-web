@@ -78,6 +78,17 @@
             <q-icon name="dns" size="xs" class="q-mr-xs" />{{ props.row.machine || "—" }}
           </q-td>
         </template>
+        <template #body-cell-label="props">
+          <q-td :props="props">
+            <template v-if="props.row.label">
+              <q-icon name="label" size="xs" class="q-mr-xs text-primary" />{{ props.row.label }}
+              <q-tooltip v-if="props.row.label.length > 22" max-width="420px" :delay="300">
+                {{ props.row.label }}
+              </q-tooltip>
+            </template>
+            <span v-else class="text-grey-6">&mdash;</span>
+          </q-td>
+        </template>
         <template #body-cell-summary="props">
           <q-td :props="props" class="ai-summary-cell">
             {{ props.row.summary }}
@@ -272,6 +283,14 @@ export default {
           style: "width: 130px; max-width: 130px", headerStyle: "width: 130px; max-width: 130px",
         },
         {
+          // The technician's own name for the chat, set in the Pi window. Sortable and
+          // ahead of Summary because it is the column you actually scan when hunting for
+          // "that ACD job from Tuesday" - the last-message snippet rarely says.
+          name: "label", label: "Label", field: "label", align: "left", sortable: true,
+          style: "width: 170px; max-width: 170px", headerStyle: "width: 170px; max-width: 170px",
+          classes: "ellipsis",
+        },
+        {
           // Flexible filler column — must ellipsize so the table never grows wider than the pane
           name: "summary", label: "Summary", field: "summary", align: "left",
           style: "width: auto; max-width: 0", // max-width:0 + table-layout:fixed forces ellipsis
@@ -323,6 +342,7 @@ export default {
         machine,
         source: "chat",
         sourceLabel: s.multi ? "Chat (multi)" : "Chat",
+        label: s.label || "",
         summary: s.last_message || s.name || "Chat",
         user: s.user || "",
         when: s.last_activity || s.started,
@@ -343,6 +363,9 @@ export default {
           r.source === "bulk" ? `Bulk: ${r.source_name}`
           : r.source === "scheduled" ? `Scheduled: ${r.source_name}`
           : `Task: ${r.source_name}`,
+        // Task/bulk/scheduled runs are not interactive, so there is nobody to type a
+        // label. Keep the key present so the column renders a dash rather than blank.
+        label: "",
         summary: r.summary || "(running…)",
         user: r.triggered_by || "",
         when: r.started_at,
