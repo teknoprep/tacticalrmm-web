@@ -1123,19 +1123,34 @@ export default {
               // global default the session endpoint handed us. Without this the picker
               // would sit on the default while the session ran on something else.
               if (m.model?.model_id) selectedModel.value = m.model.model_id;
+              // What this window remembered from last time, and what it could not give
+              // back. Both are stated: a technician who believes Write mode is still on
+              // will not understand the refusals they start getting.
               if (m.model_source === "remembered") {
                 messages.value.push({
                   role: "system",
                   text: `Resumed on ${m.model.display} \u2014 the model this chat was last using.`,
                 });
               } else if (m.model_remembered_denied) {
-                // Say it plainly rather than silently downgrading: the person before you
-                // used a model your role does not carry.
                 messages.value.push({
                   role: "system",
                   text:
-                    `This chat was last using ${m.model_remembered_denied}, which is not available to ` +
-                    `your role \u2014 opened on ${m.model.display} instead.`,
+                    `This chat was last using ${m.model_remembered_denied}, which is not available ` +
+                    `to your role \u2014 opened on ${m.model.display} instead.`,
+                });
+              }
+              if (m.switches_restored?.length) {
+                messages.value.push({
+                  role: "system",
+                  text: `Restored from last time: ${m.switches_restored.join(", ")}.`,
+                });
+              }
+              if (m.switches_denied?.length) {
+                messages.value.push({
+                  role: "system",
+                  text:
+                    `${m.switches_denied.join(", ")} was on when this window was last used, but ` +
+                    `your role does not carry it \u2014 opened without it.`,
                 });
               }
               mutateAllowed.value = !!m.mutate_allowed;
