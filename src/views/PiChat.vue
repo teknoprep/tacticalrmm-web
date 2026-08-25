@@ -1118,6 +1118,26 @@ export default {
                 lastSentLabel = sessionLabel.value;
               }
               applyWindowTitle();
+              // The bridge decides which model this window actually opens on: it reopens
+              // on whatever the conversation was last using, which is NOT necessarily the
+              // global default the session endpoint handed us. Without this the picker
+              // would sit on the default while the session ran on something else.
+              if (m.model?.model_id) selectedModel.value = m.model.model_id;
+              if (m.model_source === "remembered") {
+                messages.value.push({
+                  role: "system",
+                  text: `Resumed on ${m.model.display} \u2014 the model this chat was last using.`,
+                });
+              } else if (m.model_remembered_denied) {
+                // Say it plainly rather than silently downgrading: the person before you
+                // used a model your role does not carry.
+                messages.value.push({
+                  role: "system",
+                  text:
+                    `This chat was last using ${m.model_remembered_denied}, which is not available to ` +
+                    `your role \u2014 opened on ${m.model.display} instead.`,
+                });
+              }
               mutateAllowed.value = !!m.mutate_allowed;
               costVisible.value = !!m.cost_visible;
               // Autocomplete is whatever the bridge says this role may use. Nothing is
