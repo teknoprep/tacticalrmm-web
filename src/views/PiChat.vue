@@ -556,7 +556,38 @@
     </q-banner>
 
     <!-- input -->
-    <div class="bg-grey-9 q-pa-sm row items-end">
+    <div class="bg-grey-9 q-pa-sm row items-end relative-position">
+      <!-- SLASH COMMANDS. The list comes from the bridge (`ready.commands`), never from
+           here, so it can only offer what this role may actually use. A switch the role
+           does not carry is still listed, greyed, with the reason - hiding it makes a
+           permission look like a missing feature, and the tech asks the wrong question. -->
+      <div v-if="cmdMatches.length" class="pi-cmd-menu bg-grey-10">
+        <div
+          v-for="(c, i) in cmdMatches"
+          :key="c.name"
+          class="pi-cmd-item"
+          :class="{ 'pi-cmd-active': i === cmdIndex }"
+          @mousedown.prevent="applyCommand(c)"
+          @mouseover="cmdIndex = i"
+        >
+          <div class="row items-center no-wrap">
+            <span :class="c.allowed ? 'text-white' : 'text-grey-6'">{{ c.usage }}</span>
+            <q-badge
+              v-if="cmdState(c)"
+              class="q-ml-sm"
+              :color="cmdState(c) === 'ON' ? 'light-green-8' : 'blue-grey-7'"
+              :label="cmdState(c)"
+            />
+            <q-icon v-if="!c.allowed" name="lock" size="14px" class="q-ml-sm text-grey-6" />
+          </div>
+          <div class="text-caption" :class="c.allowed ? 'text-grey-5' : 'text-orange-8'">
+            {{ c.allowed ? c.desc : c.denied }}
+          </div>
+        </div>
+        <div class="text-caption text-grey-6 q-px-sm q-py-xs">
+          Tab or Enter completes &mdash; Esc dismisses
+        </div>
+      </div>
       <q-input
         v-model="input"
         type="textarea"
@@ -566,10 +597,14 @@
         outlined
         :placeholder="isMulti
           ? 'Tell Pi what to do across these machines...'
-          : 'Ask about this device, or tell Pi what to do...'"
+          : 'Ask about this device, or type / for commands...'"
         class="col"
         :disable="!connected"
-        @keydown.enter.exact.prevent="send"
+        @keydown.enter.exact.prevent="onEnter"
+        @keydown.tab="onCmdTab"
+        @keydown.down="onCmdArrow(1, $event)"
+        @keydown.up="onCmdArrow(-1, $event)"
+        @keydown.esc="cmdDismissed = true"
       />
       <q-btn
         v-if="!streaming"
@@ -593,7 +628,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getBaseUrl } from "@/boot/axios";
 import {
@@ -672,6 +707,70 @@ export default {
     const selectedModel = ref(null);
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
+    // --- slash commands ------------------------------------------------------
+    // The toolbar switches, typed. The point of them is the phone: the Remote Pi app
+    // renders a chat and nothing else, so "/write on" is the only way to reach Write
+    // mode from a car park. The browser gets the same commands with autocomplete, and
+    // the list is whatever the BRIDGE said this role may use - see `ready.commands`.
+    const commands = ref([]);
+    const cmdIndex = ref(0);
+    const cmdDismissed = ref(false);
+
+    /** Live state for the badge, so the list never shows a stale ON/OFF. */
+    function cmdState(c) {
+      if (!c.allowed) return "";
+      if (c.name === "write") return readOnly.value ? "OFF" : "ON";
+      if (c.name === "approve") return autoApprove.value ? "ON" : "OFF";
+      if (c.name === "credentials") return autoCredential.value ? "ON" : "OFF";
+      if (c.name === "email") return allowEmail.value ? "ON" : "OFF";
+      return "";
+    }
+
+    /** Matches only while the NAME is still being typed - a space means args now. */
+    const cmdMatches = computed(() => {
+      if (cmdDismissed.value || !commands.value.length) return [];
+      const m = /^\/([A-Za-z?][A-Za-z0-9?_-]*)?$/.exec(input.value);
+      if (!m) return [];
+      const q = (m[1] || "").toLowerCase();
+      return commands.value
+        .filter((c) => !q || c.name.startsWith(q) || (c.aliases || []).some((a) => a.startsWith(q)))
+        .slice(0, 8);
+    });
+
+    watch(input, () => { cmdDismissed.value = false; cmdIndex.value = 0; });
+
+    function applyCommand(c) {
+      input.value = `/${c.name} `;
+      cmdIndex.value = 0;
+    }
+
+    function onEnter() {
+      const list = cmdMatches.value;
+      if (list.length) { applyCommand(list[Math.min(cmdIndex.value, list.length - 1)]); return; }
+      send();
+    }
+
+    function onCmdTab(e) {
+      const list = cmdMatches.value;
+      if (!list.length) return;
+      e.preventDefault();
+      applyCommand(list[Math.min(cmdIndex.value, list.length - 1)]);
+    }
+
+    function onCmdArrow(dir, e) {
+      const list = cmdMatches.value;
+      if (!list.length) return;
+      e.preventDefault();
+      cmdIndex.value = (cmdIndex.value + dir + list.length) % list.length;
+    }
+
+    /** A window command answers instantly; it must not raise the streaming spinner. */
+    function looksLikeCommand(text) {
+      const m = /^\/([A-Za-z?][A-Za-z0-9?_-]*)/.exec(text.trim());
+      if (!m) return false;
+      const w = m[1].toLowerCase();
+      return commands.value.some((c) => c.name === w || (c.aliases || []).includes(w));
+    }
     // --- live cost meter -----------------------------------------------------
     // Only populated when the server says this operator's role may see spend
     // (can_view_ai_cost, or superuser). The bridge sends nothing otherwise, so an
@@ -1021,6 +1120,9 @@ export default {
               applyWindowTitle();
               mutateAllowed.value = !!m.mutate_allowed;
               costVisible.value = !!m.cost_visible;
+              // Autocomplete is whatever the bridge says this role may use. Nothing is
+              // inferred here, so the list cannot drift from what the server enforces.
+              commands.value = Array.isArray(m.commands) ? m.commands : [];
               if (m.remote_allowed !== undefined) remoteAllowed.value = !!m.remote_allowed;
               contextWindow.value = Number(m.context_window || 0);
               if (m.operator_enabled && Array.isArray(m.operator_machines) && m.operator_machines.length) {
@@ -1106,14 +1208,9 @@ export default {
             } else if (m.type === "autocredential_state") {
               // The server is authoritative: if the role does not carry the permission it
               // comes back false, and the switch snaps back rather than lying to the tech.
+              // The transcript line comes from the bridge as a `system_note` (one place,
+              // so the phone reads the same sentence) - don't write a second one here.
               autoCredential.value = !!m.value;
-              messages.value.push({
-                role: "system",
-                text: m.value
-                  ? "Auto-credential ON — Pi may use stored IT Notebook logins for this customer without asking each time. Privileged rows still ask you every time, and every lookup is audited."
-                  : "Auto-credential OFF — Pi must ask you before reading any stored credential.",
-              });
-              scrollToBottom();
             } else if (m.type === "remote_state") {
               // The server decides. If it says not allowed, the button goes back to off
               // and the technician is told why, rather than being left with a control
@@ -1177,13 +1274,13 @@ export default {
             } else if (m.type === "readonly_state") {
               readOnly.value = m.value;
             } else if (m.type === "allow_email_state") {
+              // Same as above: the bridge narrates it once, for both surfaces.
               allowEmail.value = m.value;
-              messages.value.push({
-                role: "system",
-                text: m.value
-                  ? "Switched to READ-ONLY mode."
-                  : "Switched to WRITE mode — Pi can now apply changes (with approval).",
-              });
+            } else if (m.type === "system_note") {
+              // A window command answered - possibly typed on the paired phone. It goes
+              // in the transcript because "who turned Write mode on" belongs on record.
+              streaming.value = false;
+              messages.value.push({ role: "system", text: m.text });
               scrollToBottom();
             } else if (m.type === "model_changed") {
               selectedModel.value = m.model_id;
@@ -1257,8 +1354,13 @@ export default {
       primeCompletionAudio();
       messages.value.push({ role: "user", text });
       currentIdx = -1;
-      streaming.value = true;
-      streamStartAt.value = Date.now();
+      // A window command ("/write on") is answered by the bridge in a millisecond and
+      // never reaches the model, so raising the streaming spinner for it would leave a
+      // "working" state with nothing working.
+      if (!looksLikeCommand(text)) {
+        streaming.value = true;
+        streamStartAt.value = Date.now();
+      }
       markActivity();
       ws.send(JSON.stringify({ type: "prompt", message: text }));
       input.value = "";
@@ -1509,6 +1611,15 @@ export default {
       sendAutoApprove,
       onModelChange,
       startNewChat,
+      // slash commands
+      cmdMatches,
+      cmdIndex,
+      cmdDismissed,
+      cmdState,
+      applyCommand,
+      onEnter,
+      onCmdTab,
+      onCmdArrow,
     };
   },
 };
@@ -1548,6 +1659,29 @@ export default {
   border-radius: 4px;
   padding: 6px 8px;
   font-size: 12px;
+}
+.pi-cmd-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  right: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #455a64;
+  border-radius: 4px;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+}
+.pi-cmd-item {
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #263238;
+}
+.pi-cmd-item:last-of-type {
+  border-bottom: none;
+}
+.pi-cmd-active {
+  background: #37474f;
 }
 .pi-args,
 .pi-result {
