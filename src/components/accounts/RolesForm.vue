@@ -171,6 +171,21 @@
                 </q-tooltip>
               </q-checkbox>
               <q-checkbox
+                v-model="localRole.can_use_ai_remote"
+                label="Use AI from mobile (Remote Pi)"
+              >
+                <q-tooltip>
+                  Lets this role pair a phone to an OPEN Pi Chat or AI Decision window
+                  and work that same conversation from it &mdash; read the stream, reply,
+                  and approve device actions while away from the desk. It grants no new
+                  capability: the phone inherits the window's state (read-only vs write,
+                  auto-approve, allowed models) and cannot raise it. What it does grant is
+                  reach, so it is its own permission. Requires a relay URL to be set in
+                  Global Settings &rarr; Pi.dev AI &rarr; Remote (mobile); with no relay
+                  configured, nobody gets it. Closing the window closes the connection.
+                </q-tooltip>
+              </q-checkbox>
+              <q-checkbox
                 v-model="localRole.can_manage_all_ai_tasks"
                 label="Manage/delete all AI tasks & bulk commands (any owner)"
               >
@@ -564,6 +579,7 @@ export default {
           can_use_ai_mutate: false,
           can_use_ai_autoapprove: false,
           can_use_ai_autocredential: false,
+          can_use_ai_remote: false,
           can_manage_all_ai_tasks: false,
           can_view_ai_cost: false,
           ai_allowed_models: [],

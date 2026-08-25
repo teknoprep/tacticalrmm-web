@@ -186,9 +186,45 @@
         outlined
         dense
         label="Allowed Operator workstations"
+        hint="Type a computer name, customer or site to search - e.g. 'dev25' or 'farmerboy'"
         :disable="!settings.ai_operator_enabled"
+        @filter="filterOperatorAgents"
         @update:model-value="update('ai_operator_allowed_agent_ids', $event)"
-      />
+      >
+        <!-- Show WHICH machine this is. Hostnames repeat across customers, so a bare
+             list of them cannot be picked from safely. -->
+        <template #option="scope">
+          <q-item v-bind="scope.itemProps">
+            <q-item-section>
+              <q-item-label>{{ scope.opt.hostname }}</q-item-label>
+              <q-item-label caption>
+                {{ scope.opt.client }}<span v-if="scope.opt.site"> &mdash; {{ scope.opt.site }}</span>
+              </q-item-label>
+            </q-item-section>
+          </q-item>
+        </template>
+        <!-- Chips resolve from the FULL agent map, not the filtered options: while a
+             search is narrowing the list, map-options can no longer resolve an
+             already-selected value and the chip would fall back to the raw agent_id. -->
+        <template #selected-item="scope">
+          <q-chip
+            removable
+            dense
+            :tabindex="scope.tabindex"
+            class="q-ma-xs"
+            @remove="scope.removeAtIndex(scope.index)"
+          >
+            {{ operatorAgentLabel(scope.opt) }}
+          </q-chip>
+        </template>
+        <template #no-option>
+          <q-item>
+            <q-item-section class="text-grey">
+              No workstation matches that name, customer or site
+            </q-item-section>
+          </q-item>
+        </template>
+      </q-select>
       <div class="text-caption text-grey">
         Desktop tools never reach machines outside this list. Save Global Settings to apply changes.
       </div>
@@ -628,6 +664,55 @@
         When a provider starts offering a model the installed AI runtime does not know yet, it
         is registered with the runtime so it can be selected the same day &mdash; instead of
         waiting for a runtime upgrade. The model id is verified with the provider first.
+      </div>
+    </div>
+
+    <settings-section
+      title="Remote (mobile) — work an AI window from your phone"
+      tip="Lets a technician pair a phone to ONE open Pi Chat or AI Decision window and carry on that same conversation from it. There is no default relay on purpose: a relay can see the conversation passing through it, so it has to be one you chose."
+    >
+      <template #action>
+        <q-toggle
+          :model-value="settings.ai_remote_enabled"
+          label="Enabled"
+          :disable="!(settings.ai_remote_relay_url || '').trim()"
+          @update:model-value="update('ai_remote_enabled', $event)"
+        />
+      </template>
+    </settings-section>
+    <div class="text-caption text-grey q-mb-sm">
+      A technician opens a device chat or a ticket chat as normal, presses
+      <strong>Remote</strong> in that window, and scans the QR code with the Remote Pi mobile
+      app. The phone then follows the <strong>same</strong> conversation &mdash; it can read
+      the stream, reply, and approve or deny device actions &mdash; which is what makes a
+      ticket workable from a machine room or a customer site. The phone inherits the window's
+      state and cannot raise it: no Write mode it wasn't already in, no model outside the
+      role's list, no new chats. <strong>Closing the window closes the connection.</strong>
+      Nothing survives it.
+    </div>
+    <div class="text-caption text-orange-8 q-mb-sm">
+      The relay is a network boundary. Traffic to it is TLS-protected, but the relay operator
+      can see the protocol content and metadata passing through &mdash; it is not end-to-end
+      encrypted. Point this at a relay you run or trust, ideally behind a VPN. Leave it blank
+      and the feature stays completely unavailable.
+    </div>
+    <div class="row q-col-gutter-md items-start q-mb-sm">
+      <q-input
+        class="col-7"
+        dense
+        outlined
+        clearable
+        :model-value="settings.ai_remote_relay_url"
+        label="Relay URL"
+        placeholder="https://relay.example.com"
+        hint="http:// or https:// — the address your reverse proxy serves. The WebSocket form is derived from it."
+        @update:model-value="update('ai_remote_relay_url', $event || '')"
+      />
+      <div class="col text-caption text-grey">
+        Users also need the role permission
+        <strong>Use AI from mobile (Remote Pi)</strong> before the button appears in their
+        chat windows. Pairing is per technician: a phone paired by one user can never attach
+        to another user's window.
       </div>
     </div>
 
@@ -1222,6 +1307,7 @@ import { renderMarkdown } from "@/utils/markdown";
 import SettingsSection from "@/components/ui/SettingsSection.vue";
 import InfoTip from "@/components/ui/InfoTip.vue";
 import { useAgentDropdown } from "@/composables/agents";
+import { fetchAgents } from "@/api/agents";
 
 export default {
   name: "AISettings",
@@ -1430,9 +1516,79 @@ export default {
     }
     const models = ref([]);
     const { agentOptions, getAgentOptions } = useAgentDropdown();
-    const operatorAgentOptions = computed(() =>
-      (agentOptions.value || []).filter((option) => option && option.value),
-    );
+
+    // WORKSTATION PICKER.
+    //
+    // This select had `use-input` but no `@filter`, and in Quasar that combination does
+    // nothing: typing narrowed nothing, so finding a machine meant scrolling every agent
+    // in the estate. It also offered hostnames only, which is not enough to pick with -
+    // hostnames repeat across customers, and people look for "that dev box at FarmerBoy"
+    // rather than for a bare name. So options carry client and site, and the search runs
+    // over all three.
+    const operatorAgents = ref([]);          // {value, label, hostname, client, site}
+    const operatorAgentFilter = ref("");
+
+    async function loadOperatorAgents() {
+      try {
+        const rows = await fetchAgents({ detail: false });
+        // The two agent serializers name these differently: detail=false
+        // (AgentHostnameSerializer) returns `client`/`site`, while the table serializer
+        // returns `client_name`/`site_name`. Read both, or searching by customer silently
+        // matches nothing and every caption renders blank.
+        operatorAgents.value = (rows || [])
+          .filter((a) => a && a.agent_id)
+          .map((a) => {
+            const client = a.client || a.client_name || "";
+            const site = a.site || a.site_name || "";
+            return {
+              value: a.agent_id,
+              hostname: a.hostname || a.agent_id,
+              client,
+              site,
+              // `label` is what map-options falls back to and what a plain-text search of
+              // the chip would see; keep the whole identity in it.
+              label: [a.hostname, client, site].filter(Boolean).join(" - "),
+            };
+          })
+          .sort((x, y) =>
+            (x.client || "").localeCompare(y.client || "") ||
+            (x.hostname || "").localeCompare(y.hostname || ""),
+          );
+      } catch (e) {
+        // Fall back to the shared dropdown rather than leaving the field unusable.
+        operatorAgents.value = (agentOptions.value || [])
+          .filter((o) => o && o.value)
+          .map((o) => ({ value: o.value, hostname: o.label, client: "", site: "", label: o.label }));
+      }
+    }
+
+    // Every whitespace-separated word must match somewhere, so "dev25 farmer" finds
+    // dev25-1 at FarmerBoy AG without needing the words in a particular order.
+    const operatorAgentOptions = computed(() => {
+      const q = operatorAgentFilter.value.trim().toLowerCase();
+      if (!q) return operatorAgents.value;
+      const terms = q.split(/\s+/);
+      return operatorAgents.value.filter((o) => {
+        const hay = `${o.hostname} ${o.client} ${o.site}`.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      });
+    });
+
+    function filterOperatorAgents(val, update) {
+      update(() => {
+        operatorAgentFilter.value = val || "";
+      });
+    }
+
+    // Resolve a chip's text from the full list. `scope.opt` is the raw agent_id once the
+    // options array has been narrowed by a search, which is when a chip would otherwise
+    // show a uuid instead of a hostname.
+    function operatorAgentLabel(opt) {
+      const id = opt && typeof opt === "object" ? opt.value : opt;
+      const found = operatorAgents.value.find((o) => o.value === id);
+      if (!found) return opt && opt.label ? opt.label : String(id);
+      return found.client ? `${found.hostname} (${found.client})` : found.hostname;
+    }
     const operatorModelOptions = computed(() =>
       models.value
         .filter((model) => model.enabled)
@@ -1673,6 +1829,7 @@ export default {
 
     onMounted(loadAll);
     onMounted(getAgentOptions);
+    onMounted(loadOperatorAgents);
     onMounted(loadRuntimeStatus);
 
     return {
@@ -1712,6 +1869,8 @@ export default {
       models,
       operatorAgentOptions,
       operatorModelOptions,
+      filterOperatorAgents,
+      operatorAgentLabel,
       providerColumns,
       modelColumns,
       providerNameOptions,
