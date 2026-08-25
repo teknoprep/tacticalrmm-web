@@ -172,7 +172,7 @@
         @update:model-value="sendAutoApprove"
       />
       <q-toggle
-        v-if="isDecision && autocredentialAllowed"
+        v-if="autocredentialAllowed"
         v-model="autoCredential"
         dense
         color="purple"
@@ -183,8 +183,12 @@
         <q-tooltip>
           Let Pi look up a stored IT Notebook login (username/password) for this
           customer without stopping to ask you each time. Separate from Auto-approve
-          on purpose. PRIVILEGED rows still ask you every time, and every automatic
-          lookup is written to the audit log.
+          on purpose, and Auto-approve never covers credentials.
+          <br /><br />
+          PRIVILEGED rows are the exception: Pi asks every time it wants one on its own
+          initiative. If you ask for the admin/privileged login yourself in the chat, it
+          stops asking &mdash; your instruction is the authorisation, and the sentence is
+          recorded. Every lookup is written to the audit log either way.
         </q-tooltip>
       </q-toggle>
       <q-toggle
