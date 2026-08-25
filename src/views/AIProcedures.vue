@@ -274,6 +274,7 @@
 
 <script>
 import { defineComponent, ref, onBeforeUnmount, nextTick } from "vue";
+import { useRoute } from "vue-router";
 import { useQuasar } from "quasar";
 import {
   getProcedures,
@@ -296,9 +297,21 @@ export default defineComponent({
     const loading = ref(false);
     const mining = ref(false);
     const saving = ref(false);
-    const q = ref("");
-    const category = ref("");
-    const statusFilter = ref("");
+    // Seed the filters from the URL so a link can point at ONE procedure.
+    // The readiness report links procedures by id; without this the page opened and
+    // listed all 386, which makes the link worse than no link -- it looks like it
+    // worked and quietly shows you everything.
+    //
+    // ?q=345 filters to that procedure (the API already matches a numeric q against the
+    // id). A leading # is tolerated because that is how the report displays ids.
+    const route = useRoute();
+    const seed = (key, fallback = "") => {
+      const v = route.query[key];
+      return typeof v === "string" && v.length ? v.replace(/^#/, "") : fallback;
+    };
+    const q = ref(seed("q"));
+    const category = ref(seed("category"));
+    const statusFilter = ref(seed("status"));
     const editDialog = ref(false);
     const edit = ref({});
     const editIndex = ref(-1);

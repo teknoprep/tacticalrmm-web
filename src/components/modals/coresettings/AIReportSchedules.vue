@@ -277,6 +277,16 @@
             </div>
           </template>
 
+          <div
+            v-if="form.kind === 'autowork_readiness'"
+            class="text-caption text-grey q-mb-md"
+          >
+            For every ticket that arrived in the window: would the AI have worked
+            it unattended, which procedure would it have used, and what is
+            blocking it. Links the ticket, the procedure and any KB article it
+            references so each verdict can be checked. Read-only — it arms
+            nothing and changes no ticket.
+          </div>
           <div v-if="form.kind !== 'ai_spend'" class="text-caption text-grey q-mb-md">
             {{
               form.kind === "activity"
@@ -379,6 +389,10 @@ export default {
         value: "tech_productivity",
       },
       { label: "AI Spend — what the AI cost", value: "ai_spend" },
+      {
+        label: "AI Auto-work Readiness — would it work each ticket alone",
+        value: "autowork_readiness",
+      },
     ];
     const cadenceOptions = [
       { label: "Every day", value: "daily" },

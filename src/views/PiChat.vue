@@ -107,10 +107,32 @@
             ({{ contextPct }}%)
           </div>
           <div v-if="contextPct >= 80" class="text-orange-4 q-mt-xs">
-            Context is nearly full &mdash; start a new chat soon.
+            Context is nearly full &mdash; Compact to keep working in this chat.
           </div>
         </q-tooltip>
       </q-chip>
+      <!-- Compact. Every turn re-sends the whole conversation, and switching model throws
+           the provider's cache away and re-sends it at full price. Compacting summarises
+           the history in place so the thread survives but stops being paid for. -->
+      <q-btn
+        flat
+        dense
+        no-caps
+        icon="compress"
+        label="Compact"
+        class="q-mr-sm"
+        :color="contextPct >= 80 ? 'orange' : undefined"
+        :disable="streaming || compacting"
+        :loading="compacting"
+        @click="compactWindow"
+      >
+        <q-tooltip>
+          Summarise this conversation to cut the cost of every following turn.
+          The transcript above stays readable; the model continues from a summary.
+          Do this before switching model &mdash; a switch re-sends the whole
+          conversation at full price.
+        </q-tooltip>
+      </q-btn>
       <q-btn
         v-if="!isDecision"
         flat
@@ -176,6 +198,33 @@
       >
         <q-tooltip>Let Pi send replies to the customer on this ticket. Off = drafts only.</q-tooltip>
       </q-toggle>
+      <q-btn
+        v-if="remoteAllowed"
+        flat
+        dense
+        no-caps
+        class="q-mr-sm"
+        :color="remoteState === 'paired' ? 'light-green' : remoteEnabled ? 'amber' : 'grey-5'"
+        :icon="remoteState === 'paired' ? 'phonelink' : 'phonelink_off'"
+        :label="remoteLabel"
+        :loading="remoteBusy"
+        @click="toggleRemote"
+      >
+        <q-tooltip>
+          <span v-if="remoteState === 'paired'">
+            Paired with {{ remoteDevice }}. This conversation is live on that phone.
+            Closing this window ends it.
+          </span>
+          <span v-else-if="remoteEnabled">
+            Waiting for a phone. Click to show the pairing code again, or switch it off.
+          </span>
+          <span v-else>
+            Work this same conversation from your phone with the Remote Pi app &mdash;
+            read the stream, reply, and approve device actions while you're away from
+            the desk. The connection closes when this window closes.
+          </span>
+        </q-tooltip>
+      </q-btn>
       <q-btn
         v-if="!isDecision"
         flat
@@ -278,7 +327,15 @@
                command, a list, an indented block - rendered as one unreadable paragraph the
                instant it was sent, even though it looked right in the textarea. The assistant
                bubble always had it; the user's own message did not. -->
-          <div class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
+          <div>
+            <!-- Where it was typed matters when two surfaces drive one session: a message
+                 that arrived from a phone should not read as if the person at the desk
+                 sent it. -->
+            <div v-if="msg.via" class="text-caption text-grey-5 text-right q-mb-xs">
+              <q-icon name="smartphone" size="14px" /> from {{ msg.via }}
+            </div>
+            <div class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
+          </div>
         </div>
         <!-- assistant -->
         <div v-else-if="msg.role === 'assistant'" class="row justify-start">
@@ -411,6 +468,56 @@
       </q-card>
     </q-dialog>
 
+    <!-- Remote (mobile) pairing -->
+    <q-dialog v-model="remoteDialog">
+      <q-card dark class="bg-grey-9" style="width: 420px; max-width: 95vw">
+        <q-card-section class="row items-center q-pb-none">
+          <q-icon name="phonelink" size="sm" class="q-mr-sm" />
+          <div class="text-h6">Pair a phone</div>
+          <q-space />
+          <q-btn icon="close" flat round dense v-close-popup />
+        </q-card-section>
+        <q-card-section class="text-center">
+          <div v-if="remotePairingUri">
+            <div class="bg-white q-pa-md inline-block" style="border-radius: 6px">
+              <img :src="remoteQr" alt="Pairing QR code" style="width: 240px; height: 240px" />
+            </div>
+            <div class="text-caption text-grey-5 q-mt-md">
+              Scan with the <strong>Remote Pi</strong> app. The code is valid for about a
+              minute and can only be used once &mdash; press Remote again for a fresh one.
+            </div>
+            <q-input
+              dense
+              dark
+              outlined
+              readonly
+              class="q-mt-sm"
+              :model-value="remotePairingUri"
+              label="Or paste this into the app"
+            >
+              <template #append>
+                <q-btn flat dense round icon="content_copy" @click="copyPairingUri" />
+              </template>
+            </q-input>
+          </div>
+          <div v-else class="q-py-lg">
+            <q-spinner size="32px" />
+            <div class="text-caption text-grey-5 q-mt-sm">Opening the relay&hellip;</div>
+          </div>
+        </q-card-section>
+        <q-card-section v-if="remoteDevices.length" class="q-pt-none">
+          <div class="text-caption text-grey-5">
+            Already paired: {{ remoteDevices.map((d) => d.name).join(", ") }}. A phone you
+            have paired before reconnects on its own &mdash; no scan needed.
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps label="Turn Remote off" color="grey-5" @click="disableRemote" />
+          <q-btn flat no-caps label="Done" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- connection lost banner -->
     <q-banner v-if="connectionLost" class="bg-red-9 text-white">
       <template #avatar><q-icon name="wifi_off" /></template>
@@ -496,7 +603,8 @@ import {
 import { fetchAITaskRunLive, createDecisionSession } from "@/api/core";
 import { useAgentDropdown } from "@/composables/agents";
 import { useAICompletionAlerts } from "@/composables/aiCompletionAlerts";
-import { notifyError } from "@/utils/notify";
+import { useQRCode } from "@vueuse/integrations/useQRCode";
+import { notifyError, notifySuccess } from "@/utils/notify";
 import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
 
 export default {
@@ -564,6 +672,27 @@ export default {
     // Only populated when the server says this operator's role may see spend
     // (can_view_ai_cost, or superuser). The bridge sends nothing otherwise, so an
     // unprivileged operator cannot infer cost from traffic either.
+    // --- Remote (mobile) -----------------------------------------------------
+    // Pair a phone to THIS window and carry on the same conversation from it. The server
+    // is authoritative on every one of these: `remoteAllowed` comes from the minted
+    // session blob (role + global switch + a configured relay), and every state change
+    // arrives as a `remote_state` frame rather than being assumed locally - so the button
+    // can never claim the conversation is on a phone when it is not.
+    const remoteAllowed = ref(false);
+    const remoteEnabled = ref(false);
+    const remoteState = ref("off");
+    const remoteDevice = ref("");
+    const remoteDevices = ref([]);
+    const remoteBusy = ref(false);
+    const remoteDialog = ref(false);
+    const remotePairingUri = ref("");
+    const remoteQr = useQRCode(remotePairingUri, { width: 240, margin: 1 });
+    const remoteLabel = computed(() => {
+      if (remoteState.value === "paired") return `Remote: ${remoteDevice.value || "paired"}`;
+      if (remoteEnabled.value) return "Remote: waiting";
+      return "Remote";
+    });
+
     const costVisible = ref(false);
     const sessionCost = ref(0);
     const lastTurnCost = ref(0);
@@ -579,6 +708,7 @@ export default {
     const modelSwitches = ref(0);
     const switchSpend = ref(0);
     const pricingKnown = ref(true);
+    const compacting = ref(false);
     const contextPct = computed(() =>
       contextWindow.value > 0
         ? Math.min(100, Math.round((contextTokens.value / contextWindow.value) * 100))
@@ -844,6 +974,7 @@ export default {
           if (data.auto_approve !== undefined) autoApprove.value = !!data.auto_approve;
           autocredentialAllowed.value = !!data.autocredential_allowed;
           if (data.auto_credential !== undefined) autoCredential.value = !!data.auto_credential;
+          remoteAllowed.value = !!data.remote_allowed;
 
           const url = `${wsBase()}/pi/ws/${data.token}/`;
           ws = new WebSocket(url);
@@ -886,6 +1017,7 @@ export default {
               applyWindowTitle();
               mutateAllowed.value = !!m.mutate_allowed;
               costVisible.value = !!m.cost_visible;
+              if (m.remote_allowed !== undefined) remoteAllowed.value = !!m.remote_allowed;
               contextWindow.value = Number(m.context_window || 0);
               if (m.operator_enabled && Array.isArray(m.operator_machines) && m.operator_machines.length) {
                 const names = m.operator_machines.map((x) => x.hostname || x.agent_id).filter(Boolean).join(", ");
@@ -978,6 +1110,66 @@ export default {
                   : "Auto-credential OFF — Pi must ask you before reading any stored credential.",
               });
               scrollToBottom();
+            } else if (m.type === "remote_state") {
+              // The server decides. If it says not allowed, the button goes back to off
+              // and the technician is told why, rather than being left with a control
+              // that looks armed.
+              remoteBusy.value = false;
+              remoteAllowed.value = m.allowed !== undefined ? !!m.allowed : remoteAllowed.value;
+              remoteEnabled.value = !!m.enabled;
+              remoteState.value = m.state || (m.enabled ? "waiting" : "off");
+              const wasPaired = remoteDevice.value;
+              remoteDevice.value = m.device || "";
+              remoteDevices.value = m.devices || [];
+              if (m.error) {
+                remoteDialog.value = false;
+                notifyError(m.error);
+              }
+              if (!m.enabled) {
+                remotePairingUri.value = "";
+                remoteDialog.value = false;
+              }
+              if (remoteState.value === "paired" && remoteDevice.value !== wasPaired) {
+                // Pairing succeeded - close the QR and put it in the transcript, because
+                // "who else can drive this session" belongs in the record.
+                remoteDialog.value = false;
+                remotePairingUri.value = "";
+                messages.value.push({
+                  role: "system",
+                  text: `\u{1F4F1} ${remoteDevice.value} paired \u2014 this conversation is now live on that phone. It closes when you close this window.`,
+                });
+                scrollToBottom();
+              }
+            } else if (m.type === "remote_pairing") {
+              remoteBusy.value = false;
+              remotePairingUri.value = m.uri || "";
+              remoteDialog.value = true;
+            } else if (m.type === "remote_user_message") {
+              // Typed on the phone. It has to appear here too, or two people end up
+              // giving the same machine contradictory instructions.
+              messages.value.push({
+                role: "user",
+                text: m.text,
+                via: m.device || "phone",
+              });
+              scrollToBottom();
+            } else if (m.type === "approval_resolved") {
+              // Answered from the phone - drop it from the on-screen queue so the banner
+              // does not sit there asking for a decision that has already been made.
+              approvalQueue.value = approvalQueue.value.filter((a) => a.id !== m.id);
+              messages.value.push({
+                role: "system",
+                text: `\u{1F4F1} ${m.approved ? "Approved" : "Denied"} from the paired phone.`,
+              });
+              scrollToBottom();
+            } else if (m.type === "compacted") {
+              // Put the result in the transcript: it is a real, billable event and the
+              // technician should be able to see later why the context suddenly shrank.
+              compacting.value = false;
+              messages.value.push({ role: "system", text: `\u{1F5DC} ${m.message}` });
+              scrollToBottom();
+            } else if (m.type === "working" && m.note) {
+              compacting.value = /compact/i.test(m.note);
             } else if (m.type === "readonly_state") {
               readOnly.value = m.value;
             } else if (m.type === "allow_email_state") {
@@ -1021,6 +1213,9 @@ export default {
               messages.value.push({ role: "system", text: `\u26a0 ${m.message}` });
               scrollToBottom();
               streaming.value = false;
+              // A refused or failed compaction arrives as an error; clear the button too,
+              // or it spins until the backstop timeout for something already finished.
+              compacting.value = false;
             }
           };
         })
@@ -1036,6 +1231,18 @@ export default {
     function reconnect() {
       connectionLost.value = false;
       connect({ resume: curSessionId, model_id: selectedModel.value });
+    }
+
+    // Compacting is a session instruction, not a question for the model, so it goes as
+    // its own frame. The bridge also accepts "/compact" typed into the box, which is what
+    // works in a window that has not been reloaded since this shipped.
+    function compactWindow() {
+      if (!ws || !connected.value || streaming.value || compacting.value) return;
+      compacting.value = true;
+      ws.send(JSON.stringify({ type: "compact" }));
+      // The bridge answers with `compacted` or an `error`; both clear the flag. This is a
+      // backstop so a dropped frame cannot leave the button spinning forever.
+      setTimeout(() => { compacting.value = false; }, 180000);
     }
 
     function send() {
@@ -1088,6 +1295,39 @@ export default {
       saveAIAutoCredential(!!val).catch(() => {
         notifyError("Auto-credential is set for this window, but could not be saved as your default.");
       });
+    }
+
+    // Remote is a three-state button rather than a toggle, because "on" and "a phone is
+    // actually attached" are different facts and conflating them is how someone walks
+    // away believing they are reachable when nothing is listening.
+    function toggleRemote() {
+      if (!ws) return;
+      if (remoteEnabled.value) {
+        // Already on: show the code again rather than tearing it down. Turning it off is
+        // a deliberate act inside the dialog, so a mis-click can't drop a live phone.
+        remoteDialog.value = true;
+        ws.send(JSON.stringify({ type: "remote_pair" }));
+        return;
+      }
+      remoteBusy.value = true;
+      remotePairingUri.value = "";
+      remoteDialog.value = true;
+      ws.send(JSON.stringify({ type: "set_remote", value: true }));
+    }
+
+    function disableRemote() {
+      remoteDialog.value = false;
+      remotePairingUri.value = "";
+      if (ws) ws.send(JSON.stringify({ type: "set_remote", value: false }));
+    }
+
+    async function copyPairingUri() {
+      try {
+        await navigator.clipboard.writeText(remotePairingUri.value);
+        notifySuccess("Pairing link copied");
+      } catch {
+        notifyError("Could not copy the pairing link");
+      }
     }
 
     function sendAutoApprove(val) {
@@ -1187,6 +1427,8 @@ export default {
       lastTurnCost,
       costTurns,
       contextTokens,
+      compacting,
+      compactWindow,
       contextWindow,
       costTokens,
       costSpend,
@@ -1227,6 +1469,19 @@ export default {
       autocredentialAllowed,
       autoCredential,
       sendAutoCredential,
+      remoteAllowed,
+      remoteEnabled,
+      remoteState,
+      remoteDevice,
+      remoteDevices,
+      remoteBusy,
+      remoteLabel,
+      remoteDialog,
+      remotePairingUri,
+      remoteQr,
+      toggleRemote,
+      disableRemote,
+      copyPairingUri,
       sessionLabel,
       sendLabel,
       mutateAllowed,
