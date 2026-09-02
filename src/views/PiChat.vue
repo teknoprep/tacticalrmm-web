@@ -255,6 +255,15 @@
           </div>
           <div>Last turn: {{ fmtMoney(lastTurnCost) }}</div>
 
+          <!-- The meter above is THIS conversation only: a new chat starts at $0.00 even
+               on a device that has spent hundreds. The lifetime figure is what billing
+               cares about, so it is kept here rather than dropped. -->
+          <div v-if="windowCost !== null" class="text-grey-4 q-mt-xs">
+            {{ windowScope === "ticket" ? "This ticket" : "This device" }}, all chats:
+            <b>{{ fmtMoney(windowCost) }}</b>
+            &middot; {{ windowTurns }} turns
+          </div>
+
           <!-- Where the money went. cacheWrite/cacheRead usually dominate, which is
                invisible in a single total. -->
           <template v-if="costSpend">
@@ -956,6 +965,13 @@ export default {
     const sessionCost = ref(0);
     const lastTurnCost = ref(0);
     const costTurns = ref(0);
+    // Lifetime spend of the wider window (this device, or this ticket) that the
+    // conversation sits inside. Display only - the chip itself meters THIS chat, which
+    // is what an operator can actually act on. `null` = the server could not read the
+    // ledger, so we say nothing rather than showing a wrong $0.00.
+    const windowCost = ref(null);
+    const windowTurns = ref(0);
+    const windowScope = ref("agent");
     const contextTokens = ref(0);
     const contextWindow = ref(0);
     const costTokens = ref({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 });
@@ -1558,6 +1574,12 @@ export default {
               modelSwitches.value = Number(m.model_switches || 0);
               switchSpend.value = Number(m.switch_spend || 0);
               pricingKnown.value = m.pricing_known !== false;
+              windowCost.value =
+                m.window_cost === null || m.window_cost === undefined
+                  ? null
+                  : Number(m.window_cost);
+              windowTurns.value = Number(m.window_turns || 0);
+              if (m.window_scope) windowScope.value = String(m.window_scope);
             } else if (m.type === "cost_warning") {
               // An expensive turn / filling context: show it in the transcript so it
               // is on the record, not just a toast that disappears.
@@ -1852,6 +1874,9 @@ export default {
       pricingKnown,
       contextPct,
       costColor,
+      windowCost,
+      windowTurns,
+      windowScope,
       fmtMoney,
       fmtTokens,
       connectionLost,
