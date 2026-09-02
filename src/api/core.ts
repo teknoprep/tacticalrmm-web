@@ -149,6 +149,33 @@ export async function fetchAvailableAIModels() {
   return data;
 }
 
+export async function fetchAIAgentGroups() {
+  const { data } = await axios.get(`${baseUrl}/ai/agent-groups/`);
+  return data;
+}
+
+export async function saveAIAgentGroup(group: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/agent-groups/`, group);
+  return data;
+}
+
+export async function editAIAgentGroup(id: number, group: Record<string, unknown>) {
+  const { data } = await axios.put(`${baseUrl}/ai/agent-groups/${id}/`, group);
+  return data;
+}
+
+export async function deleteAIAgentGroup(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/agent-groups/${id}/`);
+  return data;
+}
+
+export async function seedAIAgentGroups(resetMembers = false) {
+  const { data } = await axios.post(`${baseUrl}/ai/agent-groups/seed/`, {
+    reset_members: resetMembers,
+  });
+  return data;
+}
+
 export async function helpdeskAssist(messages: { role: string; content: string }[]) {
   const { data } = await axios.post(`${baseUrl}/ai/helpdesk-assist/`, { messages });
   return data as { reply: string };

@@ -2,16 +2,199 @@
   <div class="pichat bg-grey-10 text-white">
     <!-- toolbar -->
     <q-toolbar class="bg-grey-9 text-white q-px-sm">
-      <q-icon name="smart_toy" size="sm" class="q-mr-sm" />
-      <div class="column">
-        <div class="text-subtitle2">
+      <!-- ☰ Options menu. Every switch and session action lives HERE now - the bar keeps
+           only what you read at a glance (label, cost, model, alerts, connection). -->
+      <q-btn
+        flat
+        dense
+        round
+        icon="menu"
+        class="q-mr-sm"
+        aria-label="Chat options"
+        data-test="pi-options-menu"
+      >
+        <q-tooltip>Options &amp; switches</q-tooltip>
+        <q-menu dark>
+          <q-list dense dark class="q-py-sm" style="min-width: 320px; max-width: 90vw">
+            <q-item-label header class="text-grey-5">Automation</q-item-label>
+            <q-item v-if="autoapproveAllowed" tag="label" dense>
+              <q-item-section>
+                <q-item-label>Auto-approve</q-item-label>
+                <q-item-label caption>Run device actions without asking each time</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle
+                  v-model="autoApprove"
+                  dense
+                  color="orange"
+                  @update:model-value="sendAutoApprove"
+                />
+              </q-item-section>
+            </q-item>
+            <q-item v-if="autocredentialAllowed" tag="label" dense>
+              <q-item-section>
+                <q-item-label>Auto-credential</q-item-label>
+                <q-item-label caption>
+                  Read ordinary stored logins without asking. Privileged rows still ask;
+                  every lookup is audited.
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle
+                  v-model="autoCredential"
+                  dense
+                  color="purple"
+                  @update:model-value="sendAutoCredential"
+                />
+              </q-item-section>
+            </q-item>
+            <q-item v-if="isDecision" tag="label" dense>
+              <q-item-section>
+                <q-item-label>Allow customer email</q-item-label>
+                <q-item-label caption>Off = Pi drafts replies for you instead of sending</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle
+                  v-model="allowEmail"
+                  dense
+                  color="teal"
+                  @update:model-value="sendAllowEmail"
+                />
+              </q-item-section>
+            </q-item>
+            <q-item v-if="mutateAllowed" tag="label" dense>
+              <q-item-section>
+                <q-item-label>{{ readOnly ? "Read-only (devices)" : "Write mode (devices)" }}</q-item-label>
+                <q-item-label caption>
+                  Write mode lets Pi apply changes on the machines; each action still asks
+                  unless Auto-approve is on
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle
+                  :model-value="!readOnly"
+                  dense
+                  color="deep-orange"
+                  @update:model-value="(v) => setReadonly(!v)"
+                />
+              </q-item-section>
+            </q-item>
+            <q-item v-else-if="readOnly" dense>
+              <q-item-section>
+                <q-item-label class="text-blue-grey-3">Read-only (devices)</q-item-label>
+                <q-item-label caption>Your role cannot enable Write mode</q-item-label>
+              </q-item-section>
+            </q-item>
+
+            <q-separator dark class="q-my-sm" />
+            <q-item-label header class="text-grey-5">Session</q-item-label>
+            <q-item
+              v-if="remoteAllowed"
+              clickable
+              v-close-popup
+              :disable="remoteBusy"
+              @click="toggleRemote"
+            >
+              <q-item-section avatar>
+                <q-icon
+                  :name="remoteState === 'paired' ? 'phonelink' : 'phonelink_off'"
+                  :color="remoteState === 'paired' ? 'light-green' : remoteEnabled ? 'amber' : 'grey-5'"
+                />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>{{ remoteLabel }}</q-item-label>
+                <q-item-label caption>
+                  <span v-if="remoteState === 'paired'">Paired with {{ remoteDevice }} &mdash; live on that phone</span>
+                  <span v-else-if="remoteEnabled">Waiting for a phone &mdash; click to show the code</span>
+                  <span v-else>Work this same conversation from your phone</span>
+                </q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item v-if="!isDecision" clickable v-close-popup @click="openMachinesDialog">
+              <q-item-section avatar>
+                <q-icon name="lan" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>{{ isMulti ? "Machines" : "Multi-machine" }}</q-item-label>
+                <q-item-label caption>Work several machines in one conversation</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item v-if="!isDecision" clickable v-close-popup @click="startNewChat">
+              <q-item-section avatar>
+                <q-icon name="add" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>New chat</q-item-label>
+                <q-item-label caption>Fresh conversation on this machine</q-item-label>
+              </q-item-section>
+            </q-item>
+
+            <q-separator dark class="q-my-sm" />
+            <q-item-label header class="text-grey-5">History &amp; cost</q-item-label>
+            <q-item
+              clickable
+              v-close-popup
+              :disable="streaming || compacting"
+              @click="compactWindow"
+            >
+              <q-item-section avatar>
+                <q-icon name="compress" :color="contextPct >= 80 ? 'orange' : undefined" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>Summarize (compact)</q-item-label>
+                <q-item-label caption>
+                  Shrink what the AI re-reads every turn; the transcript above stays readable
+                </q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item
+              clickable
+              v-close-popup
+              :disable="streaming || compacting"
+              data-test="pi-summarize-clear"
+              @click="clearConfirm = true"
+            >
+              <q-item-section avatar>
+                <q-icon name="delete_sweep" color="orange" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>Summarize &amp; clear history</q-item-label>
+                <q-item-label caption>
+                  Same, plus wipe the transcript from this window &mdash; keep working in the
+                  same chat without paying for the old history
+                </q-item-label>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-menu>
+      </q-btn>
+      <div class="column pi-title q-mr-sm">
+        <div class="text-subtitle2 ellipsis">
           Pi.dev &mdash; {{ hostname || (isMulti ? "multi-machine" : agentId) }}
         </div>
-        <div class="text-caption text-grey-5">
+        <div class="text-caption text-grey-5 ellipsis">
           {{ clientSite }}
         </div>
       </div>
       <q-space />
+      <!-- Summarizing progress. The action lives in the ☰ menu, which closes on click -
+           without this chip there is NOTHING on screen saying a billable, minute-long
+           LLM call is running. Toolbar chip = visible even when scrolled up. -->
+      <q-chip
+        v-if="compacting"
+        dense
+        square
+        color="amber-9"
+        text-color="white"
+        class="q-mr-sm"
+      >
+        <q-spinner-hourglass size="14px" class="q-mr-xs" />
+        Summarizing…
+        <q-tooltip>
+          The AI is writing a summary of this conversation. Takes up to a minute or two
+          on a long chat. The window updates by itself when it finishes.
+        </q-tooltip>
+      </q-chip>
       <!-- SESSION LABEL. The technician's own name for this conversation, so AI History
            can be searched by what the work WAS. The generated name ("Chat about PBX3")
            and the last-message snippet are enough to find a session from ten minutes ago
@@ -24,8 +207,8 @@
         outlined
         clearable
         placeholder="Label this chat"
-        class="q-mr-sm"
-        style="min-width: 190px; max-width: 260px"
+        class="q-mr-sm pi-label-input"
+        style="min-width: 140px; max-width: 220px"
         :maxlength="120"
         data-test="ai-session-label"
         @blur="sendLabel"
@@ -111,163 +294,24 @@
           </div>
         </q-tooltip>
       </q-chip>
-      <!-- Compact. Every turn re-sends the whole conversation, and switching model throws
-           the provider's cache away and re-sends it at full price. Compacting summarises
-           the history in place so the thread survives but stops being paid for. -->
-      <q-btn
-        flat
-        dense
-        no-caps
-        icon="compress"
-        label="Compact"
-        class="q-mr-sm"
-        :color="contextPct >= 80 ? 'orange' : undefined"
-        :disable="streaming || compacting"
-        :loading="compacting"
-        @click="compactWindow"
-      >
-        <q-tooltip>
-          Summarise this conversation to cut the cost of every following turn.
-          The transcript above stays readable; the model continues from a summary.
-          Do this before switching model &mdash; a switch re-sends the whole
-          conversation at full price.
-        </q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="!isDecision"
-        flat
-        dense
-        no-caps
-        icon="lan"
-        :label="isMulti ? 'Machines' : 'Multi-machine'"
-        class="q-mr-sm"
-        @click="openMachinesDialog"
-      >
-        <q-tooltip>
-          Work on several machines in one conversation (e.g. cluster two
-          Proxmox nodes, or pair a Proxmox server with its Backup Server)
-        </q-tooltip>
-      </q-btn>
       <q-select
-        v-model="selectedModel"
-        :options="modelOptions"
+        v-model="selectedTarget"
+        :options="targetOptions"
         emit-value
         map-options
         dense
         dark
         options-dense
         outlined
-        style="min-width: 200px"
-        label="Model"
-        class="q-mr-sm"
-        @update:model-value="onModelChange"
-      />
-      <q-toggle
-        v-if="autoapproveAllowed"
-        v-model="autoApprove"
-        dense
-        color="orange"
-        label="Auto-approve"
-        class="q-mr-sm"
-        @update:model-value="sendAutoApprove"
-      />
-      <q-toggle
-        v-if="autocredentialAllowed"
-        v-model="autoCredential"
-        dense
-        color="purple"
-        label="Auto-credential"
-        class="q-mr-sm"
-        @update:model-value="sendAutoCredential"
+        hide-bottom-space
+        label="Model / group"
+        class="q-mr-sm pi-target-select"
+        @update:model-value="onTargetChange"
       >
         <q-tooltip>
-          Let Pi look up a stored IT Notebook login (username/password) for this
-          customer without stopping to ask you each time. Separate from Auto-approve
-          on purpose, and Auto-approve never covers credentials.
-          <br /><br />
-          PRIVILEGED rows are the exception: Pi asks every time it wants one on its own
-          initiative. If you ask for the admin/privileged login yourself in the chat, it
-          stops asking &mdash; your instruction is the authorisation, and the sentence is
-          recorded. Every lookup is written to the audit log either way.
+          Pick a team (orchestrator + cheap specialists) or a single model. Not both.
         </q-tooltip>
-      </q-toggle>
-      <q-toggle
-        v-if="isDecision"
-        v-model="allowEmail"
-        dense
-        color="teal"
-        label="Allow customer email"
-        class="q-mr-sm"
-        @update:model-value="sendAllowEmail"
-      >
-        <q-tooltip>Let Pi send replies to the customer on this ticket. Off = drafts only.</q-tooltip>
-      </q-toggle>
-      <q-btn
-        v-if="remoteAllowed"
-        flat
-        dense
-        no-caps
-        class="q-mr-sm"
-        :color="remoteState === 'paired' ? 'light-green' : remoteEnabled ? 'amber' : 'grey-5'"
-        :icon="remoteState === 'paired' ? 'phonelink' : 'phonelink_off'"
-        :label="remoteLabel"
-        :loading="remoteBusy"
-        @click="toggleRemote"
-      >
-        <q-tooltip>
-          <span v-if="remoteState === 'paired'">
-            Paired with {{ remoteDevice }}. This conversation is live on that phone.
-            Closing this window ends it.
-          </span>
-          <span v-else-if="remoteEnabled">
-            Waiting for a phone. Click to show the pairing code again, or switch it off.
-          </span>
-          <span v-else>
-            Work this same conversation from your phone with the Remote Pi app &mdash;
-            read the stream, reply, and approve device actions while you're away from
-            the desk. The connection closes when this window closes.
-          </span>
-        </q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="!isDecision"
-        flat
-        dense
-        no-caps
-        icon="add"
-        label="New chat"
-        class="q-mr-sm"
-        @click="startNewChat"
-      />
-      <!-- toggle when the role can write; static badge when it can't -->
-      <q-toggle
-        v-if="mutateAllowed"
-        :model-value="!readOnly"
-        dense
-        color="deep-orange"
-        :label="readOnly ? 'Read-only (devices)' : 'Write mode (devices)'"
-        class="q-mr-sm"
-        @update:model-value="(v) => setReadonly(!v)"
-      >
-        <q-tooltip>
-          Read-only gathers info and proposes fixes without changing the DEVICES in
-          this session. Switch to Write mode to let Pi apply changes on the machines.
-          Ticket actions (reply to the customer, internal note, create a ticket, KB)
-          do not need Write mode — they are approved per call.
-        </q-tooltip>
-      </q-toggle>
-      <q-badge
-        v-else-if="readOnly"
-        color="blue-grey"
-        label="read-only (devices)"
-        class="q-mr-sm"
-      >
-        <q-tooltip>
-          This session can only inspect devices. DEVICE changes require an account
-          with AI write (mutate) rights. Ticket actions (reply, note, create, KB) are
-          unaffected and still available, with approval.
-        </q-tooltip>
-      </q-badge>
+      </q-select>
       <q-btn
         flat
         round
@@ -325,13 +369,13 @@
     <div ref="scrollArea" class="pi-messages q-pa-md">
       <div v-for="(msg, i) in messages" :key="i" class="q-mb-md">
         <!-- user -->
-        <div v-if="msg.role === 'user'" class="row justify-end">
+        <div v-if="msg.role === 'user'" class="pi-user-row">
           <!-- pi-text carries `white-space: pre-wrap`. Without it the browser collapses every
                run of whitespace and drops newlines, so anything pasted in - a log extract, a
                command, a list, an indented block - rendered as one unreadable paragraph the
                instant it was sent, even though it looked right in the textarea. The assistant
                bubble always had it; the user's own message did not. -->
-          <div>
+          <div class="pi-user-wrap">
             <!-- Where it was typed matters when two surfaces drive one session: a message
                  that arrived from a phone should not read as if the person at the desk
                  sent it. -->
@@ -369,6 +413,16 @@
         <div v-else class="row justify-center">
           <div class="text-caption text-grey-5 pi-text">{{ msg.text }}</div>
         </div>
+      </div>
+      <!-- Compacting indicator in the transcript flow, where eyes already are. Separate
+           from the streaming row because compaction is not a turn - no stall watchdog,
+           no Stop button, just an honest "this is running". -->
+      <div v-if="compacting && !streaming" class="row items-center q-gutter-xs q-mt-xs">
+        <q-spinner-hourglass color="amber" />
+        <span class="text-caption text-amber-4">
+          Summarizing the conversation&hellip; this is an AI call and can take a minute or
+          two on a long chat. The result will appear here when it is done.
+        </span>
       </div>
       <div v-if="streaming" class="row items-center q-gutter-xs q-mt-xs">
         <q-spinner-dots color="primary" />
@@ -467,6 +521,44 @@
             no-caps
             :label="isMulti ? 'Apply machines (new chat)' : 'Start multi-machine chat'"
             @click="launchMulti"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Summarize & clear history: confirm before wiping the window. -->
+    <q-dialog v-model="clearConfirm">
+      <q-card dark style="min-width: 480px; max-width: 90vw">
+        <q-card-section class="text-subtitle1">Summarize &amp; clear history?</q-card-section>
+        <q-card-section class="text-grey-4 q-pt-none">
+          Pi writes a short summary of everything so far, keeps working from it in this
+          same window, and clears the transcript above. Following turns stop paying to
+          re-read the old history. The full record stays on disk (AI History / the
+          ticket), so nothing is lost for audit.
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <q-input
+            v-model="clearNote"
+            type="textarea"
+            outlined
+            dark
+            autogrow
+            autofocus
+            :input-style="{ minHeight: '88px' }"
+            label="Note for the summary (optional)"
+            hint="e.g. done with the extension edit UI — next is the dialplan. What to keep, what this chapter was."
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn v-close-popup flat no-caps label="Cancel" />
+          <q-btn
+            v-close-popup
+            unelevated
+            no-caps
+            color="primary"
+            label="Summarize &amp; clear"
+            data-test="pi-summarize-clear-confirm"
+            @click="summarizeClear"
           />
         </q-card-actions>
       </q-card>
@@ -658,6 +750,30 @@ export default {
     const isDecision = !!decisionToken;
     const agentId = route.params.agent_id;
     const isMulti = agentId === "multi";
+
+    function targetStorageKey() {
+      if (isDecision) return `pi-target:decision:${decisionToken}`;
+      if (isMulti) return "pi-target:multi";
+      return `pi-target:agent:${agentId}`;
+    }
+    function loadSavedTarget() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(targetStorageKey()) || "null");
+        return raw && typeof raw === "object" ? raw : null;
+      } catch {
+        return null;
+      }
+    }
+    function saveTarget(groupId, modelId) {
+      try {
+        localStorage.setItem(
+          targetStorageKey(),
+          JSON.stringify({ group_id: groupId ?? null, model_id: modelId || null }),
+        );
+      } catch {
+        /* preference only */
+      }
+    }
     const {
       soundEnabled,
       desktopEnabled,
@@ -705,6 +821,46 @@ export default {
     const input = ref("");
     const modelOptions = ref([]);
     const selectedModel = ref(null);
+    const selectedGroup = ref(null);
+    const selectedTarget = ref(null);
+    const targetOptions = ref([]);
+
+    function targetValue(groupId, modelId) {
+      if (groupId != null) return `group:${groupId}`;
+      if (modelId) return `model:${modelId}`;
+      return null;
+    }
+
+    function buildTargetOptions(groups, models, activeGroup, activeModel) {
+      const opts = [];
+      if (groups.length) {
+        opts.push({ label: "Agent groups", value: "_hdr_groups", disable: true });
+        for (const g of groups) {
+          opts.push({
+            label: g.is_default ? `${g.name} (default)` : g.name,
+            value: `group:${g.id}`,
+          });
+        }
+      }
+      if (models.length) {
+        opts.push({ label: "Single models", value: "_hdr_models", disable: true });
+        for (const m of models) {
+          opts.push({
+            label: m.display_name || m.model_id,
+            value: `model:${m.model_id}`,
+          });
+        }
+      }
+      const sel = targetValue(activeGroup?.id ?? null, activeGroup ? null : activeModel);
+      if (sel && !opts.some((o) => o.value === sel)) {
+        opts.push({
+          label: activeGroup?.name || activeModel || sel,
+          value: sel,
+        });
+      }
+      targetOptions.value = opts;
+      selectedTarget.value = sel;
+    }
     const autoApprove = ref(false);
     const autoapproveAllowed = ref(false);
     // --- slash commands ------------------------------------------------------
@@ -1043,24 +1199,44 @@ export default {
       }
     }
 
-    function connect({ model_id, resume } = {}) {
+    function connect({ model_id, resume, group_id } = {}) {
       // close any existing
       if (ws) {
         try { ws.close(); } catch (e) { /* noop */ }
         ws = null;
       }
+      let sendGroup = group_id;
+      let sendModel = model_id;
+      // A refresh / new window must reopen on what THIS person last picked, not the
+      // global default — as long as they still have access (server re-checks).
+      if (group_id === undefined && model_id === undefined && !resume) {
+        const saved = loadSavedTarget();
+        if (saved && saved.group_id != null) {
+          sendGroup = saved.group_id;
+        } else if (saved && Object.prototype.hasOwnProperty.call(saved, "group_id") && saved.model_id) {
+          sendGroup = null;
+          sendModel = saved.model_id;
+        } else if (selectedGroup.value != null) {
+          sendGroup = selectedGroup.value;
+        }
+      } else if (group_id === undefined && selectedGroup.value != null) {
+        sendGroup = selectedGroup.value;
+      }
+      const groupPayload = sendGroup !== undefined ? { group_id: sendGroup } : {};
       const create = isDecision
-        ? createDecisionSession(decisionToken, { ...(model_id ? { model_id } : {}) })
+        ? createDecisionSession(decisionToken, { ...(sendModel ? { model_id: sendModel } : {}), ...groupPayload })
         : isMulti
         ? createPiMultiSession({
             machines: multiMachines,
-            ...(model_id ? { model_id } : {}),
+            ...(sendModel ? { model_id: sendModel } : {}),
             ...(resume ? { resume_session: resume } : {}),
+            ...groupPayload,
           })
         : createPiSession(agentId, {
-            ...(model_id ? { model_id } : {}),
+            ...(sendModel ? { model_id: sendModel } : {}),
             ...(resume ? { resume_session: resume } : {}),
             ...(resolveRun ? { read_only: true } : {}),
+            ...groupPayload,
           });
       create
         .then((data) => {
@@ -1071,6 +1247,17 @@ export default {
             value: m.model_id,
           }));
           selectedModel.value = data.model_id;
+          selectedGroup.value = data.agent_group?.id ?? null;
+          buildTargetOptions(
+            data.agent_groups || [],
+            data.allowed_models || [],
+            data.agent_group,
+            data.agent_group ? null : data.model_id,
+          );
+          saveTarget(
+            data.agent_group?.id ?? null,
+            data.agent_group ? null : data.model_id,
+          );
           autoapproveAllowed.value = !!data.autoapprove_allowed;
           // The server remembers the operator's Auto-approve choice; render THAT rather
           // than defaulting to off, or a refresh looks like the setting silently died.
@@ -1123,6 +1310,11 @@ export default {
               // global default the session endpoint handed us. Without this the picker
               // would sit on the default while the session ran on something else.
               if (m.model?.model_id) selectedModel.value = m.model.model_id;
+              if (m.agent_group?.id) selectedGroup.value = m.agent_group.id;
+              selectedTarget.value = targetValue(
+                selectedGroup.value,
+                selectedGroup.value ? null : selectedModel.value,
+              );
               // What this window remembered from last time, and what it could not give
               // back. Both are stated: a technician who believes Write mode is still on
               // will not understand the refusals they start getting.
@@ -1302,7 +1494,18 @@ export default {
               // Put the result in the transcript: it is a real, billable event and the
               // technician should be able to see later why the context suddenly shrank.
               compacting.value = false;
+              // "Summarize & clear": the bridge kept the summary and marked the durable
+              // cut; wipe the window so the technician gets the clean screen they asked for.
+              if (m.cleared) messages.value = [];
               messages.value.push({ role: "system", text: `\u{1F5DC} ${m.message}` });
+              // Show the summary itself - after a clear it is the only bearings left on
+              // screen, and after a plain compact it tells you what the AI now works from.
+              if (m.summary) {
+                messages.value.push({
+                  role: "assistant",
+                  text: `\u{1F4CB} Where we are (summary):\n\n${m.summary}`,
+                });
+              }
               scrollToBottom();
             } else if (m.type === "working" && m.note) {
               compacting.value = /compact/i.test(m.note);
@@ -1319,11 +1522,27 @@ export default {
               scrollToBottom();
             } else if (m.type === "model_changed") {
               selectedModel.value = m.model_id;
+              if (selectedGroup.value == null) {
+                selectedTarget.value = targetValue(null, m.model_id);
+                saveTarget(null, m.model_id);
+              }
               messages.value.push({
                 role: "system",
                 text: `Switched model to ${m.display}`,
               });
               scrollToBottom();
+            } else if (m.type === "group_changed") {
+              selectedGroup.value = m.group_id ?? null;
+              if (m.model_id) selectedModel.value = m.model_id;
+              selectedTarget.value = targetValue(m.group_id ?? null, m.group_id ? null : m.model_id);
+              saveTarget(m.group_id ?? null, m.group_id ? null : m.model_id);
+              if (m.group_id) {
+                messages.value.push({
+                  role: "system",
+                  text: `Switched to agent group ${m.display || m.name}. Orchestrator is ${m.model_display || m.model_id}.`,
+                });
+                scrollToBottom();
+              }
             } else if (m.type === "cost_update") {
               // Running spend for this conversation (server is the only source of
               // truth; we never compute cost in the browser).
@@ -1366,7 +1585,11 @@ export default {
 
     function reconnect() {
       connectionLost.value = false;
-      connect({ resume: curSessionId, model_id: selectedModel.value });
+      connect({
+        resume: curSessionId,
+        model_id: selectedModel.value,
+        group_id: selectedGroup.value,
+      });
     }
 
     // Compacting is a session instruction, not a question for the model, so it goes as
@@ -1375,9 +1598,32 @@ export default {
     function compactWindow() {
       if (!ws || !connected.value || streaming.value || compacting.value) return;
       compacting.value = true;
+      scrollToBottom(); // the progress row lives at the bottom of the transcript
       ws.send(JSON.stringify({ type: "compact" }));
       // The bridge answers with `compacted` or an `error`; both clear the flag. This is a
       // backstop so a dropped frame cannot leave the button spinning forever.
+      setTimeout(() => { compacting.value = false; }, 180000);
+    }
+
+    // Summarize & clear history: same compaction, plus the bridge marks a durable cut so
+    // this window (and any reload of it) starts clean. Confirmed via dialog first - it
+    // is not destructive on disk, but an unexpected blank screen looks destructive.
+    const clearConfirm = ref(false);
+    const clearNote = ref("");
+    function summarizeClear() {
+      if (!ws || !connected.value || streaming.value || compacting.value) return;
+      compacting.value = true;
+      scrollToBottom(); // the progress row lives at the bottom of the transcript
+      const note = String(clearNote.value || "").trim();
+      clearNote.value = "";
+      // /compact <note> is the same path as typing it: the bridge treats the rest of
+      // the line as steer for the summary ("done with X, moving to Y").
+      ws.send(JSON.stringify({
+        type: "compact",
+        clear: true,
+        message: note ? `/compact ${note}` : "",
+        instructions: note || undefined,
+      }));
       setTimeout(() => { compacting.value = false; }, 180000);
     }
 
@@ -1480,18 +1726,41 @@ export default {
       });
     }
 
-    function onModelChange(val) {
-      // switch model on the SAME session (keeps history); only reconnect if the
-      // socket is somehow closed.
-      if (ws && connected.value) {
-        ws.send(JSON.stringify({ type: "set_model", model_id: val }));
-      } else {
-        connect({ model_id: val });
+    function applyTarget(val) {
+      if (!val || String(val).startsWith("_hdr_")) return;
+      if (String(val).startsWith("group:")) {
+        const id = Number(String(val).slice(6));
+        selectedGroup.value = id;
+        saveTarget(id, null);
+        if (ws && connected.value) {
+          ws.send(JSON.stringify({ type: "set_group", group_id: id }));
+        } else {
+          connect({ group_id: id });
+        }
+        return;
+      }
+      if (String(val).startsWith("model:")) {
+        const mid = String(val).slice(6);
+        selectedGroup.value = null;
+        selectedModel.value = mid;
+        saveTarget(null, mid);
+        if (ws && connected.value) {
+          // Drop the team first, then switch the single model. Two frames, one intent.
+          ws.send(JSON.stringify({ type: "set_group", group_id: null }));
+          ws.send(JSON.stringify({ type: "set_model", model_id: mid }));
+        } else {
+          connect({ model_id: mid, group_id: null });
+        }
       }
     }
 
+    function onTargetChange(val) {
+      applyTarget(val);
+    }
+
     function startNewChat() {
-      connect({ model_id: selectedModel.value });
+      if (selectedGroup.value != null) connect({ group_id: selectedGroup.value });
+      else connect({ model_id: selectedModel.value, group_id: null });
     }
 
     // --- multi-machine setup dialog ----------------------------------------
@@ -1570,6 +1839,9 @@ export default {
       contextTokens,
       compacting,
       compactWindow,
+      clearConfirm,
+      clearNote,
+      summarizeClear,
       contextWindow,
       costTokens,
       costSpend,
@@ -1600,8 +1872,9 @@ export default {
       testCompletionAlerts,
       messages,
       input,
-      modelOptions,
-      selectedModel,
+      targetOptions,
+      selectedTarget,
+      onTargetChange,
       autoApprove,
       autoapproveAllowed,
       readOnly,
@@ -1644,7 +1917,6 @@ export default {
       abort,
       respondApproval,
       sendAutoApprove,
-      onModelChange,
       startNewChat,
       // slash commands
       cmdMatches,
@@ -1666,16 +1938,55 @@ export default {
   display: flex;
   flex-direction: column;
 }
+.pichat :deep(.q-toolbar) {
+  flex-wrap: nowrap;
+}
+.pi-title {
+  min-width: 0;
+  flex: 1 1 160px;
+  overflow: hidden;
+}
+.pi-label-input {
+  flex: 0 1 200px;
+}
+.pi-target-select {
+  flex: 0 0 200px;
+  width: 200px;
+  max-width: 200px;
+}
+.pi-target-select :deep(.q-field__native),
+.pi-target-select :deep(.q-field__label),
+.pi-target-select :deep(.q-field__control) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pi-messages {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
 }
+.pi-user-row {
+  display: flex;
+  justify-content: flex-end;
+}
+.pi-user-wrap {
+  max-width: min(85%, 56rem);
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
 .pi-bubble {
-  max-width: 85%;
+  max-width: min(85%, 56rem);
+  width: fit-content;
   padding: 8px 12px;
   border-radius: 10px;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.pi-user-wrap .pi-bubble {
+  max-width: 100%;
 }
 .pi-user {
   background: #1976d2;
