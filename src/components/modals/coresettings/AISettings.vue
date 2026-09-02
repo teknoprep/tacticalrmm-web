@@ -150,6 +150,8 @@
       </template>
     </q-table>
 
+    <AIAgentGroups />
+
     <!-- standalone desktop / browser execution policy -->
     <settings-section
       title="Pi AI Operator — Desktop Access"
@@ -1281,6 +1283,7 @@
 
 <script>
 import AIReportSchedules from "@/components/modals/coresettings/AIReportSchedules.vue";
+import AIAgentGroups from "@/components/modals/coresettings/AIAgentGroups.vue";
 import { ref, computed, onMounted } from "vue";
 import {
   fetchAIProviders,
@@ -1311,7 +1314,7 @@ import { fetchAgents } from "@/api/agents";
 
 export default {
   name: "AISettings",
-  components: { SettingsSection, InfoTip, AIReportSchedules },
+  components: { SettingsSection, InfoTip, AIReportSchedules, AIAgentGroups },
   props: {
     settings: { type: Object, required: true },
   },
