@@ -863,38 +863,39 @@
 
       <!-- add -->
       <div class="q-px-sm q-pt-sm q-pb-xs">
-        <q-input
-          v-model="queueNew"
-          type="textarea"
-          autogrow
-          dark
-          dense
-          outlined
-          placeholder="Next prompt&hellip;  (Ctrl+Enter adds)"
-          :disable="!connected"
-          data-test="pi-queue-new"
-          @keydown.enter.ctrl.prevent="queueAdd"
-        />
-        <div class="row items-center no-wrap q-mt-xs">
-          <q-checkbox v-model="queueNewCompact" dense size="sm" label="Compact first" :disable="!connected">
-            <q-tooltip max-width="300px">
-              Summarise and clear the history before this one runs, so it starts from a short
-              summary instead of the whole transcript.
-            </q-tooltip>
-          </q-checkbox>
-          <q-space />
-          <q-btn
+        <div class="row items-end no-wrap">
+          <q-input
+            v-model="queueNew"
+            type="textarea"
+            autogrow
+            dark
             dense
-            no-caps
+            outlined
+            class="col"
+            placeholder="Next prompt&hellip;  (Enter adds, Shift+Enter for a new line)"
+            :disable="!connected"
+            data-test="pi-queue-new"
+            @keydown.enter.exact.prevent="queueAdd"
+          />
+          <q-btn
+            round
             unelevated
             color="primary"
             icon="add"
-            label="Add"
+            class="q-ml-xs"
             :disable="!connected || !queueNew.trim()"
             data-test="pi-queue-add"
             @click="queueAdd"
-          />
+          >
+            <q-tooltip>Add to the queue</q-tooltip>
+          </q-btn>
         </div>
+        <q-checkbox v-model="queueNewCompact" dense size="sm" label="Compact first" class="q-mt-xs" :disable="!connected">
+          <q-tooltip max-width="300px">
+            Summarise and clear the history before this one runs, so it starts from a short
+            summary instead of the whole transcript.
+          </q-tooltip>
+        </q-checkbox>
       </div>
 
       <!-- run controls: two real buttons, readable -->
@@ -999,7 +1000,7 @@
               </div>
 
               <!-- Waiting on you: answer right here. -->
-              <div v-if="it.status === 'waiting'" class="q-mt-sm">
+              <div v-if="it.status === 'waiting'" class="row items-end no-wrap q-mt-sm">
                 <q-input
                   v-model="queueReplyText[it.id]"
                   type="textarea"
@@ -1008,23 +1009,24 @@
                   dense
                   outlined
                   color="orange-5"
-                  placeholder="Your answer&hellip;  (Ctrl+Enter sends)"
+                  class="col"
+                  placeholder="Your answer&hellip;  (Enter sends)"
                   :disable="!connected || streaming"
                   data-test="pi-queue-reply"
-                  @keydown.enter.ctrl.prevent="queueReply(it)"
+                  @keydown.enter.exact.prevent="queueReply(it)"
                 />
-                <div class="row justify-end q-mt-xs">
-                  <q-btn
-                    dense
-                    no-caps
-                    unelevated
-                    color="orange-8"
-                    icon="send"
-                    label="Answer"
-                    :disable="!connected || streaming || !(queueReplyText[it.id] || '').trim()"
-                    @click="queueReply(it)"
-                  />
-                </div>
+                <q-btn
+                  round
+                  unelevated
+                  color="orange-8"
+                  icon="send"
+                  class="q-ml-xs"
+                  :disable="!connected || streaming || !(queueReplyText[it.id] || '').trim()"
+                  data-test="pi-queue-answer"
+                  @click="queueReply(it)"
+                >
+                  <q-tooltip>Send this answer and continue</q-tooltip>
+                </q-btn>
               </div>
             </div>
 
