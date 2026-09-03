@@ -774,67 +774,95 @@
         @pointerdown="queueResizeStart"
         @dblclick="queueResizeReset"
       />
-      <div class="row items-center q-px-sm q-py-xs pi-queue-head">
+      <!-- header: title, count, overflow menu (the destructive things live here, at a
+           readable size, instead of as tiny red text in a crowded row), close -->
+      <div class="row items-center no-wrap q-px-sm q-py-xs pi-queue-head">
         <q-icon name="playlist_add_check" size="sm" class="q-mr-sm" />
-        <div class="text-subtitle2">Queue</div>
-        <q-badge v-if="queuePending" class="q-ml-sm" color="blue-grey-7" :label="`${queuePending} pending`" />
+        <div class="text-subtitle1">Queue</div>
+        <span v-if="queueItems.length" class="text-caption text-grey-5 q-ml-sm">
+          {{ queuePending }} pending<template v-if="queueItems.length !== queuePending"> &middot; {{ queueItems.length }} total</template>
+        </span>
         <q-space />
+        <q-btn flat round dense icon="more_vert" :disable="!connected" data-test="pi-queue-menu">
+          <q-tooltip>More</q-tooltip>
+          <q-menu dark>
+            <q-list dense dark style="min-width: 220px">
+              <q-item clickable v-close-popup :disable="!queueItems.some(i => i.status !== 'pending' && i.status !== 'running' && i.status !== 'waiting')" @click="queueClearDone">
+                <q-item-section avatar><q-icon name="done_all" /></q-item-section>
+                <q-item-section>Clear finished</q-item-section>
+              </q-item>
+              <q-item clickable v-close-popup :disable="!queueItems.length" class="text-red-4" @click="queueClearAll">
+                <q-item-section avatar><q-icon name="delete_sweep" color="red-4" /></q-item-section>
+                <q-item-section>Clear everything&hellip;</q-item-section>
+              </q-item>
+              <q-separator dark />
+              <q-item clickable v-close-popup @click="queueResizeReset">
+                <q-item-section avatar><q-icon name="width_normal" /></q-item-section>
+                <q-item-section>Reset panel width</q-item-section>
+              </q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
         <q-btn flat round dense icon="close" @click="queueOpen = false" />
       </div>
 
-      <div class="q-px-sm q-pb-xs">
+      <!-- switches: one row, short labels; the detail is in tooltips -->
+      <div class="row items-center no-wrap q-px-sm q-pt-xs pi-queue-switches">
         <q-toggle
           :model-value="queueAuto"
           color="green"
-          dense
           label="Auto-Next"
           :disable="!connected"
           data-test="pi-queue-auto"
           @update:model-value="queueSetAuto"
         >
-          <q-tooltip max-width="320px">
-            Send the next queued prompt automatically as soon as the assistant finishes a
-            turn. The queue stops by itself when the assistant needs a decision from you,
-            when a turn fails, or when you press Stop.
+          <q-tooltip max-width="300px">
+            Send the next prompt as soon as the assistant finishes. Stops by itself when the
+            assistant asks you something, a turn fails, or you press Stop.
           </q-tooltip>
         </q-toggle>
         <q-toggle
           :model-value="queueAutoClear"
           color="blue-grey-4"
-          dense
-          label="Auto-clear done"
+          label="Auto-clear"
           :disable="!connected"
           data-test="pi-queue-auto-clear"
           @update:model-value="queueSetAutoClear"
         >
-          <q-tooltip max-width="320px">
-            Remove each prompt from the list as soon as it has run. Failed or skipped ones
-            stay, so you can see what still needs you.
+          <q-tooltip max-width="300px">
+            Drop each prompt from the list once it has run. Anything that failed, was
+            skipped, or asked you a question stays.
           </q-tooltip>
         </q-toggle>
-        <div v-if="queuePaused" class="pi-queue-paused q-pa-sm q-mt-xs">
-          <div class="row items-center no-wrap">
-            <q-icon name="pause_circle" class="q-mr-xs" />
-            <b>Paused</b>
-            <span class="text-caption text-grey-4 q-ml-xs">
-              &mdash; {{ queuePaused.by === "assistant" ? "the assistant asked:" : "" }}
-            </span>
+      </div>
+
+      <!-- status strip: exactly one line about what the queue is doing -->
+      <div v-if="queuePaused" class="pi-queue-paused q-mx-sm q-mt-xs q-pa-sm">
+        <div class="row items-center no-wrap">
+          <q-icon name="pause_circle" color="orange-4" size="20px" class="q-mr-sm" />
+          <div class="col" style="min-width: 0">
+            <div class="text-subtitle2 text-orange-3">
+              {{ queuePaused.by === "assistant" ? "The assistant asked" : "Paused" }}
+            </div>
+            <div class="pi-text text-body2">{{ queuePaused.reason }}</div>
+            <div v-if="queuePaused.by === 'assistant'" class="text-caption text-grey-5 q-mt-xs">
+              Answer on the item below, or in the chat.
+            </div>
           </div>
-          <div class="pi-text text-body2 q-mt-xs">{{ queuePaused.reason }}</div>
-          <div class="text-caption text-grey-5 q-mt-xs" v-if="queuePaused.by === 'assistant'">
-            {{ queueItems.some(i => i.status === 'waiting')
-              ? "Answer it on the item below (or in the chat) and the queue continues after that turn. Resume moves on and leaves the question open."
-              : "Answer in the chat and the queue continues after that turn, or Resume to skip the question." }}
-          </div>
-          <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-mt-xs" @click="queueResume" />
+          <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-ml-sm" @click="queueResume">
+            <q-tooltip>Carry on with the next prompt; an open question stays on its item.</q-tooltip>
+          </q-btn>
         </div>
-        <div v-else-if="queueRunningId" class="text-caption text-green-4 q-mt-xs">
-          <q-spinner-dots size="14px" class="q-mr-xs" /> Running a queued prompt&hellip;
-        </div>
+      </div>
+      <div v-else-if="queueRunningId" class="pi-queue-status text-green-4 q-mx-sm q-mt-xs">
+        <q-spinner-dots size="16px" class="q-mr-sm" /> Running a queued prompt
+      </div>
+      <div v-else-if="queueAuto && queuePending" class="pi-queue-status text-green-4 q-mx-sm q-mt-xs">
+        <q-icon name="bolt" size="16px" class="q-mr-sm" /> Next prompt goes when the assistant is free
       </div>
 
       <!-- add -->
-      <div class="q-px-sm q-pb-sm">
+      <div class="q-px-sm q-pt-sm q-pb-xs">
         <q-input
           v-model="queueNew"
           type="textarea"
@@ -842,22 +870,23 @@
           dark
           dense
           outlined
-          placeholder="What should happen next? One prompt per entry."
+          placeholder="Next prompt&hellip;  (Ctrl+Enter adds)"
           :disable="!connected"
           data-test="pi-queue-new"
           @keydown.enter.ctrl.prevent="queueAdd"
         />
-        <div class="row items-center q-mt-xs">
-          <q-checkbox v-model="queueNewCompact" dense size="sm" label="Compact & clear first" :disable="!connected">
+        <div class="row items-center no-wrap q-mt-xs">
+          <q-checkbox v-model="queueNewCompact" dense size="sm" label="Compact first" :disable="!connected">
             <q-tooltip max-width="300px">
-              Before this prompt is sent, summarise the conversation and clear the history so
-              it starts from a short summary instead of the whole transcript.
+              Summarise and clear the history before this one runs, so it starts from a short
+              summary instead of the whole transcript.
             </q-tooltip>
           </q-checkbox>
           <q-space />
           <q-btn
             dense
             no-caps
+            unelevated
             color="primary"
             icon="add"
             label="Add"
@@ -868,38 +897,68 @@
         </div>
       </div>
 
-      <!-- actions -->
-      <div class="row items-center q-px-sm q-pb-xs q-gutter-xs">
-        <q-btn dense no-caps outline size="sm" icon="skip_next" label="Run next" :disable="!connected || streaming || !queuePending" @click="queueRunNext">
+      <!-- run controls: two real buttons, readable -->
+      <div class="row no-wrap q-px-sm q-pb-sm q-gutter-x-sm">
+        <q-btn
+          class="col"
+          dense
+          no-caps
+          outline
+          color="grey-4"
+          icon="skip_next"
+          label="Run next"
+          :disable="!connected || streaming || !queuePending"
+          @click="queueRunNext"
+        >
           <q-tooltip>Send the first pending prompt now, once, whatever Auto-Next is set to.</q-tooltip>
         </q-btn>
-        <q-btn v-if="!queuePaused" dense no-caps outline size="sm" icon="pause" label="Pause" :disable="!connected" @click="queuePause" />
-        <q-btn v-else dense no-caps outline size="sm" icon="play_arrow" label="Resume" :disable="!connected" @click="queueResume" />
-        <q-space />
-        <q-btn dense no-caps flat size="sm" icon="done_all" label="Clear done" :disable="!connected || !queueItems.some(i => i.status !== 'pending' && i.status !== 'running')" @click="queueClearDone" />
-        <q-btn dense no-caps flat size="sm" color="negative" icon="delete_sweep" label="Clear all" :disable="!connected || !queueItems.length" @click="queueClearAll" />
+        <q-btn
+          v-if="!queuePaused"
+          class="col"
+          dense
+          no-caps
+          outline
+          color="grey-4"
+          icon="pause"
+          label="Pause"
+          :disable="!connected"
+          @click="queuePause"
+        />
+        <q-btn
+          v-else
+          class="col"
+          dense
+          no-caps
+          unelevated
+          color="orange-8"
+          icon="play_arrow"
+          label="Resume"
+          :disable="!connected"
+          @click="queueResume"
+        />
       </div>
 
       <!-- list -->
       <div class="pi-queue-list q-px-sm q-pb-sm">
-        <div v-if="!queueItems.length" class="text-caption text-grey-6 q-pa-sm">
-          Nothing queued. Add the next things you want done; they stay with this conversation.
+        <div v-if="!queueItems.length" class="text-body2 text-grey-6 q-pa-md text-center">
+          Nothing queued yet.
         </div>
         <div
           v-for="(it, idx) in queueItems"
           :key="it.id"
-          class="pi-queue-item q-pa-xs q-mb-xs"
+          class="pi-queue-item q-pa-sm q-mb-xs"
           :class="`pi-queue-item--${it.status}`"
         >
           <div class="row items-start no-wrap">
             <q-icon
               :name="queueStatusIcon(it)"
               :color="queueStatusColor(it)"
-              size="18px"
-              class="q-mr-xs q-mt-xs"
+              size="20px"
+              class="q-mr-sm pi-queue-status-icon"
             >
-              <q-tooltip>{{ it.status }}{{ it.note ? ` - ${it.note}` : "" }}</q-tooltip>
+              <q-tooltip>{{ queueStatusLabel(it) }}</q-tooltip>
             </q-icon>
+
             <div class="col" style="min-width: 0">
               <q-input
                 v-if="queueEditId === it.id"
@@ -919,28 +978,28 @@
                 :class="{ 'text-grey-5': it.status === 'done' || it.status === 'skipped' }"
                 @dblclick="queueStartEdit(it)"
               >{{ it.text }}</div>
-              <div class="text-caption text-grey-6">
-                <q-icon v-if="it.compact_first" name="compress" size="12px" class="q-mr-xs">
-                  <q-tooltip>Compact &amp; clear before this one</q-tooltip>
-                </q-icon>
-                <span v-if="it.note">{{ it.note }}</span>
+
+              <div v-if="it.compact_first || it.note" class="text-caption text-grey-5 q-mt-xs">
+                <span v-if="it.compact_first" class="q-mr-sm"><q-icon name="compress" size="12px" /> compact first</span>
+                <span v-if="it.note" :class="it.status === 'failed' ? 'text-red-4' : ''">{{ it.note }}</span>
               </div>
 
               <!-- The exchange ON this item: the assistant's questions and the answers
                    given, in order. This is "where are we with this one". -->
-              <div v-if="it.thread && it.thread.length" class="pi-queue-thread q-mt-xs">
+              <div v-if="it.thread && it.thread.length" class="pi-queue-thread q-mt-sm">
                 <div
                   v-for="(t, ti) in it.thread"
                   :key="ti"
                   class="pi-queue-turn pi-text"
                   :class="t.role === 'assistant' ? 'pi-queue-turn--q' : 'pi-queue-turn--a'"
                 >
-                  <q-icon :name="t.role === 'assistant' ? 'help_outline' : 'reply'" size="13px" class="q-mr-xs" />{{ t.text }}<span v-if="t.via === 'chat'" class="text-grey-6"> (in chat)</span>
+                  <span class="pi-queue-turn-who">{{ t.role === "assistant" ? "Asked" : "You" }}<template v-if="t.via === 'chat'"> (in chat)</template></span>
+                  {{ t.text }}
                 </div>
               </div>
 
               <!-- Waiting on you: answer right here. -->
-              <div v-if="it.status === 'waiting'" class="q-mt-xs">
+              <div v-if="it.status === 'waiting'" class="q-mt-sm">
                 <q-input
                   v-model="queueReplyText[it.id]"
                   type="textarea"
@@ -948,7 +1007,8 @@
                   dark
                   dense
                   outlined
-                  placeholder="Your answer… (Ctrl+Enter sends)"
+                  color="orange-5"
+                  placeholder="Your answer&hellip;  (Ctrl+Enter sends)"
                   :disable="!connected || streaming"
                   data-test="pi-queue-reply"
                   @keydown.enter.ctrl.prevent="queueReply(it)"
@@ -957,7 +1017,7 @@
                   <q-btn
                     dense
                     no-caps
-                    size="sm"
+                    unelevated
                     color="orange-8"
                     icon="send"
                     label="Answer"
@@ -967,23 +1027,45 @@
                 </div>
               </div>
             </div>
-          </div>
-          <div class="row items-center justify-end no-wrap pi-queue-tools">
-            <template v-if="queueEditId === it.id">
-              <q-btn flat dense size="sm" icon="check" color="green-4" @click="queueSaveEdit(it)"><q-tooltip>Save (Ctrl+Enter)</q-tooltip></q-btn>
-              <q-btn flat dense size="sm" icon="close" @click="queueEditId = null" />
-            </template>
-            <template v-else>
-              <q-btn flat dense size="sm" icon="arrow_upward" :disable="idx === 0 || it.status === 'running'" @click="queueMove(it, -1)" />
-              <q-btn flat dense size="sm" icon="arrow_downward" :disable="idx === queueItems.length - 1 || it.status === 'running'" @click="queueMove(it, 1)" />
-              <q-btn flat dense size="sm" :icon="it.compact_first ? 'compress' : 'expand'" :color="it.compact_first ? 'primary' : 'grey-6'" :disable="it.status === 'running'" @click="queueToggleCompact(it)">
-                <q-tooltip>{{ it.compact_first ? "Compact & clear first: ON" : "Compact & clear first: off" }}</q-tooltip>
-              </q-btn>
-              <q-btn flat dense size="sm" icon="edit" :disable="it.status === 'running'" @click="queueStartEdit(it)" />
-              <q-btn v-if="it.status === 'pending'" flat dense size="sm" icon="remove_done" @click="queueSetStatus(it, 'skipped')"><q-tooltip>Skip</q-tooltip></q-btn>
-              <q-btn v-else-if="it.status !== 'running' && it.status !== 'waiting'" flat dense size="sm" icon="replay" @click="queueSetStatus(it, 'pending')"><q-tooltip>Queue it again</q-tooltip></q-btn>
-              <q-btn flat dense size="sm" icon="delete" color="negative" :disable="it.status === 'running'" @click="queueRemove(it)" />
-            </template>
+
+            <!-- per-item tools: move, and everything else behind one menu -->
+            <div class="column items-center no-wrap pi-queue-tools q-ml-xs">
+              <template v-if="queueEditId === it.id">
+                <q-btn flat round dense size="sm" icon="check" color="green-4" @click="queueSaveEdit(it)"><q-tooltip>Save (Ctrl+Enter)</q-tooltip></q-btn>
+                <q-btn flat round dense size="sm" icon="close" @click="queueEditId = null"><q-tooltip>Cancel (Esc)</q-tooltip></q-btn>
+              </template>
+              <template v-else>
+                <q-btn flat round dense size="sm" icon="expand_less" :disable="idx === 0 || it.status === 'running'" @click="queueMove(it, -1)"><q-tooltip>Move up</q-tooltip></q-btn>
+                <q-btn flat round dense size="sm" icon="expand_more" :disable="idx === queueItems.length - 1 || it.status === 'running'" @click="queueMove(it, 1)"><q-tooltip>Move down</q-tooltip></q-btn>
+                <q-btn flat round dense size="sm" icon="more_horiz" :disable="it.status === 'running'">
+                  <q-menu dark>
+                    <q-list dense dark style="min-width: 200px">
+                      <q-item clickable v-close-popup @click="queueStartEdit(it)">
+                        <q-item-section avatar><q-icon name="edit" /></q-item-section>
+                        <q-item-section>Edit</q-item-section>
+                      </q-item>
+                      <q-item clickable v-close-popup @click="queueToggleCompact(it)">
+                        <q-item-section avatar><q-icon :name="it.compact_first ? 'check_box' : 'check_box_outline_blank'" /></q-item-section>
+                        <q-item-section>Compact first</q-item-section>
+                      </q-item>
+                      <q-item v-if="it.status === 'pending'" clickable v-close-popup @click="queueSetStatus(it, 'skipped')">
+                        <q-item-section avatar><q-icon name="remove_done" /></q-item-section>
+                        <q-item-section>Skip</q-item-section>
+                      </q-item>
+                      <q-item v-else-if="it.status !== 'waiting'" clickable v-close-popup @click="queueSetStatus(it, 'pending')">
+                        <q-item-section avatar><q-icon name="replay" /></q-item-section>
+                        <q-item-section>Queue again</q-item-section>
+                      </q-item>
+                      <q-separator dark />
+                      <q-item clickable v-close-popup class="text-red-4" @click="queueRemove(it)">
+                        <q-item-section avatar><q-icon name="delete" color="red-4" /></q-item-section>
+                        <q-item-section>Remove</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-menu>
+                </q-btn>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -2089,6 +2171,13 @@ export default {
         skipped: "remove_done",
       }[it.status] || "help";
     }
+    function queueStatusLabel(it) {
+      const base = {
+        pending: "Waiting its turn", running: "Running now", waiting: "Needs your answer",
+        done: "Done", failed: "Failed", skipped: "Skipped",
+      }[it.status] || it.status;
+      return it.note ? `${base} - ${it.note}` : base;
+    }
     function queueStatusColor(it) {
       return {
         pending: "grey-5", running: "green-4", waiting: "orange-5", done: "green-6", failed: "red-4", skipped: "grey-6",
@@ -2336,6 +2425,7 @@ export default {
       queueSaveEdit,
       queueMove,
       queueStatusIcon,
+      queueStatusLabel,
       queueStatusColor,
       fmtMoney,
       fmtTokens,
@@ -2519,9 +2609,21 @@ export default {
 .pi-queue-head {
   border-bottom: 1px solid #3a3a3a;
 }
+.pi-queue-switches :deep(.q-toggle) {
+  margin-right: 12px;
+}
+.pi-queue-switches :deep(.q-toggle__label) {
+  font-size: 13.5px;
+}
+.pi-queue-status {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  padding: 4px 2px;
+}
 .pi-queue-paused {
-  background: rgba(255, 152, 0, 0.12);
-  border: 1px solid rgba(255, 152, 0, 0.5);
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.45);
   border-radius: 6px;
 }
 .pi-queue-list {
@@ -2549,21 +2651,34 @@ export default {
   padding-left: 6px;
 }
 .pi-queue-turn {
-  font-size: 12.5px;
-  margin-bottom: 3px;
+  font-size: 13px;
+  line-height: 1.35;
+  margin-bottom: 4px;
+}
+.pi-queue-turn-who {
+  display: inline-block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 6px;
+  opacity: 0.8;
 }
 .pi-queue-turn--q {
   color: #ffcc80;
 }
 .pi-queue-turn--a {
-  color: #cfd8dc;
+  color: #e0e0e0;
 }
 .pi-queue-text {
   cursor: text;
   word-break: break-word;
+  line-height: 1.35;
+}
+.pi-queue-status-icon {
+  margin-top: 1px;
 }
 .pi-queue-tools {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 .pi-queue-item:hover .pi-queue-tools {
   opacity: 1;
