@@ -790,6 +790,20 @@
             when a turn fails, or when you press Stop.
           </q-tooltip>
         </q-toggle>
+        <q-toggle
+          :model-value="queueAutoClear"
+          color="blue-grey-4"
+          dense
+          label="Auto-clear done"
+          :disable="!connected"
+          data-test="pi-queue-auto-clear"
+          @update:model-value="queueSetAutoClear"
+        >
+          <q-tooltip max-width="320px">
+            Remove each prompt from the list as soon as it has run. Failed or skipped ones
+            stay, so you can see what still needs you.
+          </q-tooltip>
+        </q-toggle>
         <div v-if="queuePaused" class="pi-queue-paused q-pa-sm q-mt-xs">
           <div class="row items-center no-wrap">
             <q-icon name="pause_circle" class="q-mr-xs" />
@@ -1173,6 +1187,7 @@ export default {
     const queueOverlay = computed(() => $q.screen.lt.md);
     const queueItems = ref([]);
     const queueAuto = ref(false);
+    const queueAutoClear = ref(false);
     const queuePaused = ref(null);
     const queueRunningId = ref(null);
     const queuePending = ref(0);
@@ -1783,6 +1798,7 @@ export default {
             } else if (m.type === "queue_state") {
               queueItems.value = Array.isArray(m.items) ? m.items : [];
               queueAuto.value = !!m.auto_next;
+              queueAutoClear.value = !!m.auto_clear_done;
               queueRunningId.value = m.running_id || null;
               queuePending.value = Number(m.pending || 0);
               queuePaused.value = m.paused || null;
@@ -1933,6 +1949,7 @@ export default {
       queueNewCompact.value = false;
     }
     function queueSetAuto(v) { queueSend({ type: "queue_set_auto", value: !!v }); }
+    function queueSetAutoClear(v) { queueSend({ type: "queue_set_auto_clear", value: !!v }); }
     function queuePause() { queueSend({ type: "queue_pause" }); }
     function queueResume() { queueSend({ type: "queue_resume" }); }
     function queueRunNext() { queueSend({ type: "queue_run_next" }); }
@@ -2194,6 +2211,7 @@ export default {
       queueOverlay,
       queueItems,
       queueAuto,
+      queueAutoClear,
       queuePaused,
       queueRunningId,
       queuePending,
@@ -2203,6 +2221,7 @@ export default {
       queueEditText,
       queueAdd,
       queueSetAuto,
+      queueSetAutoClear,
       queuePause,
       queueResume,
       queueRunNext,
