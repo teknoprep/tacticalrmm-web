@@ -763,9 +763,17 @@
     <aside
       v-if="queueOpen"
       class="pi-queue bg-grey-9"
-      :class="{ 'pi-queue--overlay': queueOverlay }"
+      :class="{ 'pi-queue--overlay': queueOverlay, 'pi-queue--resizing': queueResizing }"
+      :style="{ width: queueWidth + 'px', flexBasis: queueWidth + 'px' }"
       data-test="pi-queue-panel"
     >
+      <!-- Drag the left edge to make the panel wider or narrower. Double-click resets. -->
+      <div
+        class="pi-queue-grip"
+        title="Drag to resize - double-click to reset"
+        @pointerdown="queueResizeStart"
+        @dblclick="queueResizeReset"
+      />
       <div class="row items-center q-px-sm q-py-xs pi-queue-head">
         <q-icon name="playlist_add_check" size="sm" class="q-mr-sm" />
         <div class="text-subtitle2">Queue</div>
@@ -1226,6 +1234,43 @@ export default {
     const $q = useQuasar();
     const queueOpen = ref(localStorage.getItem("pi.queue.open") === "1");
     watch(queueOpen, (v) => localStorage.setItem("pi.queue.open", v ? "1" : "0"));
+    // Panel width, dragged from its left edge. Kept in this browser like open/closed.
+    const QUEUE_W_DEFAULT = 400;
+    const QUEUE_W_MIN = 300;
+    const queueWidth = ref(Number(localStorage.getItem("pi.queue.width")) || QUEUE_W_DEFAULT);
+    const queueResizing = ref(false);
+    let queueDrag = null;
+    function queueMaxWidth() {
+      // Leave the chat at least 360px unless the panel is floating over it anyway.
+      return Math.max(QUEUE_W_MIN, window.innerWidth - (queueOverlay.value ? 0 : 360));
+    }
+    function queueResizeStart(e) {
+      if (e.button !== undefined && e.button !== 0) return;
+      queueDrag = { x: e.clientX, w: queueWidth.value };
+      queueResizing.value = true;
+      const move = (ev) => {
+        if (!queueDrag) return;
+        // The grip is on the LEFT edge: dragging left (smaller x) makes the panel wider.
+        const w = queueDrag.w + (queueDrag.x - ev.clientX);
+        queueWidth.value = Math.round(Math.min(queueMaxWidth(), Math.max(QUEUE_W_MIN, w)));
+      };
+      const stop = () => {
+        queueDrag = null;
+        queueResizing.value = false;
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+        localStorage.setItem("pi.queue.width", String(queueWidth.value));
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+      e.preventDefault();
+    }
+    function queueResizeReset() {
+      queueWidth.value = QUEUE_W_DEFAULT;
+      localStorage.setItem("pi.queue.width", String(QUEUE_W_DEFAULT));
+    }
     // Narrow window: the panel floats over the chat instead of squeezing it.
     const queueOverlay = computed(() => $q.screen.lt.md);
     const queueItems = ref([]);
@@ -2260,6 +2305,10 @@ export default {
       // prompt queue
       queueOpen,
       queueOverlay,
+      queueWidth,
+      queueResizing,
+      queueResizeStart,
+      queueResizeReset,
       queueItems,
       queueAuto,
       queueAutoClear,
@@ -2418,11 +2467,13 @@ export default {
 }
 /* Prompt queue panel: a column to the right of the chat ... */
 .pi-queue {
-  flex: 0 0 400px;
-  width: 400px;
+  flex: 0 0 400px;           /* width is set inline from queueWidth */
+  min-width: 300px;
+  max-width: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
   border-left: 1px solid #3a3a3a;
 }
 /* ... or, when the window is too narrow to share, floating over it. */
@@ -2431,9 +2482,39 @@ export default {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(440px, 100%);
   z-index: 5;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.5);
+}
+/* The resize grip: a thin strip on the left edge, wider hit area than it looks. */
+.pi-queue-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 9px;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+}
+.pi-queue-grip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: #3a3a3a;
+  transition: background 0.15s, width 0.15s;
+}
+.pi-queue-grip:hover::after,
+.pi-queue--resizing .pi-queue-grip::after {
+  background: #1976d2;
+  width: 3px;
+  left: 3px;
+}
+.pi-queue--resizing,
+.pi-queue--resizing * {
+  user-select: none;
 }
 .pi-queue-head {
   border-bottom: 1px solid #3a3a3a;
