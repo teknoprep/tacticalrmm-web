@@ -379,7 +379,7 @@
         label="Queue"
         class="q-mr-sm"
         data-test="pi-queue-toggle"
-        @click="queueOpen = !queueOpen"
+        @click="queueOpen ? queueClose() : (queueOpen = true)"
       >
         <q-badge
           v-if="queuePending > 0"
@@ -783,6 +783,9 @@
           {{ queuePending }} pending<template v-if="queueItems.length !== queuePending"> &middot; {{ queueItems.length }} total</template>
         </span>
         <q-space />
+        <q-btn flat dense no-caps icon="history" label="History" :disable="!queueHistory.length" data-test="pi-queue-history" @click="queueHistoryOpen = true">
+          <q-tooltip>Everything this queue has done and how it went. For you only - never sent to the AI.</q-tooltip>
+        </q-btn>
         <q-btn flat round dense icon="more_vert" :disable="!connected" data-test="pi-queue-menu">
           <q-tooltip>More</q-tooltip>
           <q-menu dark>
@@ -803,7 +806,7 @@
             </q-list>
           </q-menu>
         </q-btn>
-        <q-btn flat round dense icon="close" @click="queueOpen = false" />
+        <q-btn flat round dense icon="close" @click="queueClose" />
       </div>
 
       <!-- switches: one row, short labels; the detail is in tooltips -->
@@ -836,22 +839,69 @@
         </q-toggle>
       </div>
 
-      <!-- status strip: exactly one line about what the queue is doing -->
-      <div v-if="queuePaused" class="pi-queue-paused q-mx-sm q-mt-xs q-pa-sm">
+      <!-- QUESTIONS - what the assistant is waiting on you for. One card each, answered
+           right here. A question raised while a queued item ran says which item; one
+           raised in ordinary chat stands alone. -->
+      <div v-if="queueQuestions.length" class="pi-queue-questions q-mx-sm q-mt-xs">
+        <div class="row items-center no-wrap q-mb-xs">
+          <q-icon name="help" color="orange-4" size="20px" class="q-mr-sm" />
+          <div class="text-subtitle2 text-orange-3">
+            {{ queueQuestions.length === 1 ? "The assistant asked" : `${queueQuestions.length} questions from the assistant` }}
+          </div>
+          <q-space />
+          <q-btn v-if="queuePaused" flat dense no-caps size="sm" color="orange-4" icon="play_arrow" label="Resume without answering" @click="queueResume">
+            <q-tooltip>Let the queue carry on; the questions stay here until answered or dismissed.</q-tooltip>
+          </q-btn>
+        </div>
+        <div v-for="q in queueQuestions" :key="q.id" class="pi-queue-question q-pa-sm q-mb-xs" data-test="pi-queue-question">
+          <div class="row items-start no-wrap">
+            <div class="col pi-text text-body2" style="min-width: 0">{{ q.text }}</div>
+            <q-btn flat round dense size="sm" icon="close" class="q-ml-xs" @click="queueDismissQuestion(q)">
+              <q-tooltip>Dismiss without answering</q-tooltip>
+            </q-btn>
+          </div>
+          <div v-if="q.item_id && queueItemText(q.item_id)" class="text-caption text-grey-5 q-mt-xs">
+            <q-icon name="subdirectory_arrow_right" size="12px" /> about: {{ queueItemText(q.item_id) }}
+          </div>
+          <div class="row items-end no-wrap q-mt-sm">
+            <q-input
+              v-model="queueAnswerText[q.id]"
+              type="textarea"
+              autogrow
+              dark
+              dense
+              outlined
+              color="orange-5"
+              class="col"
+              placeholder="Your answer&hellip;  (Enter sends)"
+              :disable="!connected || streaming"
+              data-test="pi-queue-reply"
+              @keydown.enter.exact.prevent="queueAnswer(q)"
+            />
+            <q-btn
+              round
+              unelevated
+              color="orange-8"
+              icon="send"
+              class="q-ml-xs"
+              :disable="!connected || streaming || !(queueAnswerText[q.id] || '').trim()"
+              data-test="pi-queue-answer"
+              @click="queueAnswer(q)"
+            >
+              <q-tooltip>Send this answer and continue</q-tooltip>
+            </q-btn>
+          </div>
+        </div>
+      </div>
+      <!-- status strip: one line about what the queue is doing -->
+      <div v-else-if="queuePaused" class="pi-queue-paused q-mx-sm q-mt-xs q-pa-sm">
         <div class="row items-center no-wrap">
           <q-icon name="pause_circle" color="orange-4" size="20px" class="q-mr-sm" />
           <div class="col" style="min-width: 0">
-            <div class="text-subtitle2 text-orange-3">
-              {{ queuePaused.by === "assistant" ? "The assistant asked" : "Paused" }}
-            </div>
+            <div class="text-subtitle2 text-orange-3">Paused</div>
             <div class="pi-text text-body2">{{ queuePaused.reason }}</div>
-            <div v-if="queuePaused.by === 'assistant'" class="text-caption text-grey-5 q-mt-xs">
-              Answer on the item below, or in the chat.
-            </div>
           </div>
-          <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-ml-sm" @click="queueResume">
-            <q-tooltip>Carry on with the next prompt; an open question stays on its item.</q-tooltip>
-          </q-btn>
+          <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-ml-sm" @click="queueResume" />
         </div>
       </div>
       <div v-else-if="queueRunningId" class="pi-queue-status text-green-4 q-mx-sm q-mt-xs">
@@ -985,48 +1035,25 @@
                 <span v-if="it.note" :class="it.status === 'failed' ? 'text-red-4' : ''">{{ it.note }}</span>
               </div>
 
-              <!-- The exchange ON this item: the assistant's questions and the answers
-                   given, in order. This is "where are we with this one". -->
-              <div v-if="it.thread && it.thread.length" class="pi-queue-thread q-mt-sm">
-                <div
-                  v-for="(t, ti) in it.thread"
-                  :key="ti"
-                  class="pi-queue-turn pi-text"
-                  :class="t.role === 'assistant' ? 'pi-queue-turn--q' : 'pi-queue-turn--a'"
-                >
-                  <span class="pi-queue-turn-who">{{ t.role === "assistant" ? "Asked" : "You" }}<template v-if="t.via === 'chat'"> (in chat)</template></span>
-                  {{ t.text }}
-                </div>
+              <div v-if="it.status === 'waiting'" class="text-caption text-orange-4 q-mt-xs">
+                <q-icon name="arrow_upward" size="12px" /> waiting for your answer above
               </div>
-
-              <!-- Waiting on you: answer right here. -->
-              <div v-if="it.status === 'waiting'" class="row items-end no-wrap q-mt-sm">
-                <q-input
-                  v-model="queueReplyText[it.id]"
-                  type="textarea"
-                  autogrow
-                  dark
-                  dense
-                  outlined
-                  color="orange-5"
-                  class="col"
-                  placeholder="Your answer&hellip;  (Enter sends)"
-                  :disable="!connected || streaming"
-                  data-test="pi-queue-reply"
-                  @keydown.enter.exact.prevent="queueReply(it)"
-                />
-                <q-btn
-                  round
-                  unelevated
-                  color="orange-8"
-                  icon="send"
-                  class="q-ml-xs"
-                  :disable="!connected || streaming || !(queueReplyText[it.id] || '').trim()"
-                  data-test="pi-queue-answer"
-                  @click="queueReply(it)"
-                >
-                  <q-tooltip>Send this answer and continue</q-tooltip>
-                </q-btn>
+              <!-- The questions and answers this item went through, folded away by default. -->
+              <div v-if="it.thread && it.thread.length" class="q-mt-xs">
+                <a class="text-caption text-grey-5 cursor-pointer" @click="queueToggleThread(it)">
+                  {{ queueThreadOpen[it.id] ? "hide" : "show" }} {{ Math.ceil(it.thread.length / 2) }} Q&amp;A
+                </a>
+                <div v-if="queueThreadOpen[it.id]" class="pi-queue-thread q-mt-xs">
+                  <div
+                    v-for="(t, ti) in it.thread"
+                    :key="ti"
+                    class="pi-queue-turn pi-text"
+                    :class="t.role === 'assistant' ? 'pi-queue-turn--q' : 'pi-queue-turn--a'"
+                  >
+                    <span class="pi-queue-turn-who">{{ t.role === "assistant" ? "Asked" : "You" }}<template v-if="t.via === 'chat'"> (in chat)</template></span>
+                    {{ t.text }}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1071,6 +1098,36 @@
           </div>
         </div>
       </div>
+      <!-- HISTORY - the human's record of what this queue did. Newest first. It lives in
+           the queue file and in queue_state frames only; the model never sees it. -->
+      <q-dialog v-model="queueHistoryOpen">
+        <q-card dark class="bg-grey-9" style="width: 760px; max-width: 95vw; max-height: 85vh; display: flex; flex-direction: column">
+          <q-card-section class="row items-center q-pb-none">
+            <q-icon name="history" size="sm" class="q-mr-sm" />
+            <div class="text-h6">Queue history</div>
+            <span class="text-caption text-grey-5 q-ml-sm">{{ queueHistory.length }} entries &middot; this conversation &middot; not shared with the AI</span>
+            <q-space />
+            <q-btn flat dense no-caps icon="delete_sweep" label="Clear history" color="red-4" :disable="!connected || !queueHistory.length" @click="queueClearHistory" />
+            <q-btn icon="close" flat round dense v-close-popup />
+          </q-card-section>
+          <q-card-section class="pi-queue-history-list">
+            <div v-for="(e, i) in queueHistoryView" :key="i" class="pi-queue-hist-row">
+              <div class="pi-queue-hist-when text-grey-5">{{ queueHistWhen(e.at) }}</div>
+              <q-icon :name="queueHistIcon(e.event)" :color="queueHistColor(e.event)" size="18px" class="q-mr-sm" />
+              <div class="col" style="min-width: 0">
+                <div>
+                  <span class="pi-queue-hist-event" :class="`text-${queueHistColor(e.event)}`">{{ queueHistLabel(e.event) }}</span>
+                  <span v-if="e.text" class="pi-text"> {{ e.text }}</span>
+                </div>
+                <div v-if="e.detail" class="text-caption text-grey-4 pi-text q-mt-xs">
+                  <template v-if="e.event === 'answered' || e.event === 'answered_in_chat'">&#8617; </template>{{ e.detail }}
+                </div>
+              </div>
+            </div>
+            <div v-if="!queueHistory.length" class="text-grey-6 q-pa-md text-center">Nothing yet.</div>
+          </q-card-section>
+        </q-card>
+      </q-dialog>
     </aside>
     </div><!-- /pi-body -->
   </div>
@@ -1367,7 +1424,16 @@ export default {
     const queueNewCompact = ref(false);
     const queueEditId = ref(null);
     const queueEditText = ref("");
-    const queueReplyText = ref({});   // item id -> draft answer
+    const queueQuestions = ref([]);
+    const queueHistory = ref([]);
+    const queueHistoryOpen = ref(false);
+    const queueHistoryView = computed(() => [...queueHistory.value].reverse());
+    const queueAnswerText = ref({});   // question id -> draft answer
+    const queueThreadOpen = ref({});   // item id -> Q&A unfolded
+    // Auto-open: the panel opens by itself when a chat comes up with anything queued, and
+    // whenever a question arrives. Closing it by hand sticks for this page load.
+    let queueUserClosed = false;
+    let queueFirstState = true;
     let queueLastPausedAt = null;
 
     const costVisible = ref(false);
@@ -1696,6 +1762,7 @@ export default {
           ws.onopen = () => {
             connected.value = true;
             connectionLost.value = false;
+            queueFirstState = true;
           };
           ws.onclose = () => {
             connected.value = false;
@@ -1975,6 +2042,17 @@ export default {
               queueRunningId.value = m.running_id || null;
               queuePending.value = Number(m.pending || 0);
               queuePaused.value = m.paused || null;
+              const prevQ = queueQuestions.value.map((q) => q.id);
+              queueQuestions.value = Array.isArray(m.questions) ? m.questions : [];
+              queueHistory.value = Array.isArray(m.history) ? m.history : [];
+              const newQuestion = queueQuestions.value.some((q) => !prevQ.includes(q.id));
+              if (newQuestion) { queueOpen.value = true; queueUserClosed = false; }
+              if (queueFirstState) {
+                queueFirstState = false;
+                if (queueItems.value.length || queueQuestions.value.length) queueOpen.value = true;
+              } else if (!queueUserClosed && (queueItems.value.length || queueQuestions.value.length) && !queueOpen.value) {
+                queueOpen.value = true;
+              }
               // A NEW pause goes on the record in the transcript (once), so "why did it
               // stop" is answered where the tech is looking - and so the alert fires.
               if (m.paused && m.paused.at !== queueLastPausedAt) {
@@ -1986,7 +2064,7 @@ export default {
                     : `\u23F8 Queue paused \u2014 ${m.paused.reason}`,
                 });
                 scrollToBottom();
-                if (m.paused.by === "assistant") queueOpen.value = true;
+                if (m.paused.by === "assistant") { queueOpen.value = true; queueUserClosed = false; }
               }
               if (!m.paused) queueLastPausedAt = null;
             } else if (m.type === "queue_started") {
@@ -2137,11 +2215,60 @@ export default {
       }).onOk(() => queueSend({ type: "queue_clear" }));
     }
     function queueRemove(it) { queueSend({ type: "queue_remove", id: it.id }); }
-    function queueReply(it) {
-      const text = String(queueReplyText.value[it.id] || "").trim();
+    function queueAnswer(q) {
+      const text = String(queueAnswerText.value[q.id] || "").trim();
       if (!text || streaming.value) return;
-      queueSend({ type: "queue_reply", id: it.id, text });
-      queueReplyText.value[it.id] = "";
+      queueSend({ type: "queue_answer", id: q.id, text });
+      queueAnswerText.value[q.id] = "";
+    }
+    function queueDismissQuestion(q) { queueSend({ type: "queue_dismiss_question", id: q.id }); }
+    function queueItemText(id) {
+      const it = queueItems.value.find((i) => i.id === id);
+      return it ? (it.text.length > 90 ? it.text.slice(0, 90) + "…" : it.text) : "";
+    }
+    function queueToggleThread(it) { queueThreadOpen.value[it.id] = !queueThreadOpen.value[it.id]; }
+    function queueClose() { queueUserClosed = true; queueOpen.value = false; }
+    function queueClearHistory() {
+      $q.dialog({
+        dark: true,
+        title: "Clear the queue history?",
+        message: "The record of what this queue did is deleted. The chat transcript is untouched.",
+        cancel: true,
+        ok: { label: "Clear", color: "negative", flat: true },
+      }).onOk(() => queueSend({ type: "queue_clear_history" }));
+    }
+    const QUEUE_HIST = {
+      added:            ["Added",              "add",             "grey-4"],
+      edited:           ["Edited",             "edit",            "grey-4"],
+      requeued:         ["Queued again",       "replay",          "grey-4"],
+      skipped:          ["Skipped",            "remove_done",     "grey-5"],
+      removed:          ["Removed",            "delete",          "grey-5"],
+      started:          ["Sent to the AI",     "play_arrow",      "blue-3"],
+      done:             ["Done",               "check_circle",    "green-4"],
+      failed:           ["Failed",             "error",           "red-4"],
+      stopped:          ["Stopped",            "stop_circle",     "red-4"],
+      auto_cleared:     ["Auto-cleared",       "done_all",        "grey-5"],
+      asked:            ["AI asked",           "help",            "orange-4"],
+      answered:         ["You answered",       "reply",           "orange-3"],
+      answered_in_chat: ["You answered in chat", "reply",         "orange-3"],
+      answer_sent:      ["Answer sent to the AI", "send",         "blue-3"],
+      dismissed:        ["Question dismissed", "close",           "grey-5"],
+      paused:           ["Paused",             "pause_circle",    "orange-4"],
+      resumed:          ["Resumed",            "play_circle",     "green-4"],
+      auto_next:        ["Auto-Next",          "bolt",            "grey-4"],
+      cleared_finished: ["Cleared finished",   "done_all",        "grey-5"],
+      cleared_all:      ["Cleared everything", "delete_sweep",    "red-4"],
+    };
+    function queueHistLabel(ev) { return (QUEUE_HIST[ev] || [ev])[0]; }
+    function queueHistIcon(ev) { return (QUEUE_HIST[ev] || [, "circle"])[1] || "circle"; }
+    function queueHistColor(ev) { return (QUEUE_HIST[ev] || [, , "grey-4"])[2] || "grey-4"; }
+    function queueHistWhen(at) {
+      if (!at) return "";
+      const d = new Date(at);
+      const today = new Date().toDateString() === d.toDateString();
+      return today
+        ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     }
     function queueSetStatus(it, status) { queueSend({ type: "queue_update", id: it.id, status }); }
     function queueToggleCompact(it) { queueSend({ type: "queue_update", id: it.id, compact_first: !it.compact_first }); }
@@ -2410,8 +2537,22 @@ export default {
       queueNewCompact,
       queueEditId,
       queueEditText,
-      queueReplyText,
-      queueReply,
+      queueQuestions,
+      queueAnswerText,
+      queueAnswer,
+      queueDismissQuestion,
+      queueItemText,
+      queueThreadOpen,
+      queueToggleThread,
+      queueClose,
+      queueHistory,
+      queueHistoryOpen,
+      queueHistoryView,
+      queueClearHistory,
+      queueHistLabel,
+      queueHistIcon,
+      queueHistColor,
+      queueHistWhen,
       queueAdd,
       queueSetAuto,
       queueSetAutoClear,
@@ -2627,6 +2768,37 @@ export default {
   background: rgba(255, 152, 0, 0.1);
   border: 1px solid rgba(255, 152, 0, 0.45);
   border-radius: 6px;
+}
+.pi-queue-questions {
+  background: rgba(255, 152, 0, 0.08);
+  border: 1px solid rgba(255, 152, 0, 0.45);
+  border-radius: 6px;
+  padding: 8px;
+}
+.pi-queue-question {
+  background: #2a2420;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: 6px;
+}
+.pi-queue-history-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+.pi-queue-hist-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 0;
+  border-bottom: 1px solid #333;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.pi-queue-hist-when {
+  flex: 0 0 64px;
+  font-size: 12px;
+  padding-top: 2px;
+}
+.pi-queue-hist-event {
+  font-weight: 600;
 }
 .pi-queue-list {
   flex: 1 1 0;
