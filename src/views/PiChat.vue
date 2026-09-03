@@ -419,7 +419,7 @@
               <q-icon name="smartphone" size="14px" /> from {{ msg.via }}
             </div>
             <div v-else-if="msg.queued" class="text-caption text-grey-5 text-right q-mb-xs">
-              <q-icon name="playlist_play" size="14px" /> from the queue
+              <q-icon name="playlist_play" size="14px" /> {{ msg.queuedReply ? "answered in the queue" : "from the queue" }}
             </div>
             <div class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
           </div>
@@ -814,7 +814,9 @@
           </div>
           <div class="pi-text text-body2 q-mt-xs">{{ queuePaused.reason }}</div>
           <div class="text-caption text-grey-5 q-mt-xs" v-if="queuePaused.by === 'assistant'">
-            Answer in the chat and the queue continues after that turn, or Resume to skip the question.
+            {{ queueItems.some(i => i.status === 'waiting')
+              ? "Answer it on the item below (or in the chat) and the queue continues after that turn. Resume moves on and leaves the question open."
+              : "Answer in the chat and the queue continues after that turn, or Resume to skip the question." }}
           </div>
           <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-mt-xs" @click="queueResume" />
         </div>
@@ -915,6 +917,47 @@
                 </q-icon>
                 <span v-if="it.note">{{ it.note }}</span>
               </div>
+
+              <!-- The exchange ON this item: the assistant's questions and the answers
+                   given, in order. This is "where are we with this one". -->
+              <div v-if="it.thread && it.thread.length" class="pi-queue-thread q-mt-xs">
+                <div
+                  v-for="(t, ti) in it.thread"
+                  :key="ti"
+                  class="pi-queue-turn pi-text"
+                  :class="t.role === 'assistant' ? 'pi-queue-turn--q' : 'pi-queue-turn--a'"
+                >
+                  <q-icon :name="t.role === 'assistant' ? 'help_outline' : 'reply'" size="13px" class="q-mr-xs" />{{ t.text }}<span v-if="t.via === 'chat'" class="text-grey-6"> (in chat)</span>
+                </div>
+              </div>
+
+              <!-- Waiting on you: answer right here. -->
+              <div v-if="it.status === 'waiting'" class="q-mt-xs">
+                <q-input
+                  v-model="queueReplyText[it.id]"
+                  type="textarea"
+                  autogrow
+                  dark
+                  dense
+                  outlined
+                  placeholder="Your answer… (Ctrl+Enter sends)"
+                  :disable="!connected || streaming"
+                  data-test="pi-queue-reply"
+                  @keydown.enter.ctrl.prevent="queueReply(it)"
+                />
+                <div class="row justify-end q-mt-xs">
+                  <q-btn
+                    dense
+                    no-caps
+                    size="sm"
+                    color="orange-8"
+                    icon="send"
+                    label="Answer"
+                    :disable="!connected || streaming || !(queueReplyText[it.id] || '').trim()"
+                    @click="queueReply(it)"
+                  />
+                </div>
+              </div>
             </div>
           </div>
           <div class="row items-center justify-end no-wrap pi-queue-tools">
@@ -929,8 +972,8 @@
                 <q-tooltip>{{ it.compact_first ? "Compact & clear first: ON" : "Compact & clear first: off" }}</q-tooltip>
               </q-btn>
               <q-btn flat dense size="sm" icon="edit" :disable="it.status === 'running'" @click="queueStartEdit(it)" />
-              <q-btn v-if="it.status === 'pending'" flat dense size="sm" icon="remove_done" :disable="it.status === 'running'" @click="queueSetStatus(it, 'skipped')"><q-tooltip>Skip</q-tooltip></q-btn>
-              <q-btn v-else-if="it.status !== 'running'" flat dense size="sm" icon="replay" @click="queueSetStatus(it, 'pending')"><q-tooltip>Queue it again</q-tooltip></q-btn>
+              <q-btn v-if="it.status === 'pending'" flat dense size="sm" icon="remove_done" @click="queueSetStatus(it, 'skipped')"><q-tooltip>Skip</q-tooltip></q-btn>
+              <q-btn v-else-if="it.status !== 'running' && it.status !== 'waiting'" flat dense size="sm" icon="replay" @click="queueSetStatus(it, 'pending')"><q-tooltip>Queue it again</q-tooltip></q-btn>
               <q-btn flat dense size="sm" icon="delete" color="negative" :disable="it.status === 'running'" @click="queueRemove(it)" />
             </template>
           </div>
@@ -1195,6 +1238,7 @@ export default {
     const queueNewCompact = ref(false);
     const queueEditId = ref(null);
     const queueEditText = ref("");
+    const queueReplyText = ref({});   // item id -> draft answer
     let queueLastPausedAt = null;
 
     const costVisible = ref(false);
@@ -1819,7 +1863,7 @@ export default {
             } else if (m.type === "queue_started") {
               // A queued prompt is going to the model now: show it as the user's own
               // bubble (it is their words), tagged so the transcript is honest.
-              messages.value.push({ role: "user", text: m.text, queued: true });
+              messages.value.push({ role: "user", text: m.text, queued: true, queuedReply: !!m.reply });
               currentIdx = -1;
               streaming.value = true;
               streamStartAt.value = Date.now();
@@ -1964,6 +2008,12 @@ export default {
       }).onOk(() => queueSend({ type: "queue_clear" }));
     }
     function queueRemove(it) { queueSend({ type: "queue_remove", id: it.id }); }
+    function queueReply(it) {
+      const text = String(queueReplyText.value[it.id] || "").trim();
+      if (!text || streaming.value) return;
+      queueSend({ type: "queue_reply", id: it.id, text });
+      queueReplyText.value[it.id] = "";
+    }
     function queueSetStatus(it, status) { queueSend({ type: "queue_update", id: it.id, status }); }
     function queueToggleCompact(it) { queueSend({ type: "queue_update", id: it.id, compact_first: !it.compact_first }); }
     function queueStartEdit(it) {
@@ -1988,6 +2038,7 @@ export default {
       return {
         pending: "radio_button_unchecked",
         running: "play_circle",
+        waiting: "help",
         done: "check_circle",
         failed: "error",
         skipped: "remove_done",
@@ -1995,7 +2046,7 @@ export default {
     }
     function queueStatusColor(it) {
       return {
-        pending: "grey-5", running: "green-4", done: "green-6", failed: "red-4", skipped: "grey-6",
+        pending: "grey-5", running: "green-4", waiting: "orange-5", done: "green-6", failed: "red-4", skipped: "grey-6",
       }[it.status] || "grey-5";
     }
 
@@ -2219,6 +2270,8 @@ export default {
       queueNewCompact,
       queueEditId,
       queueEditText,
+      queueReplyText,
+      queueReply,
       queueAdd,
       queueSetAuto,
       queueSetAutoClear,
@@ -2405,6 +2458,24 @@ export default {
 }
 .pi-queue-item--failed {
   border-color: #e53935;
+}
+.pi-queue-item--waiting {
+  border-color: #fb8c00;
+  background: rgba(251, 140, 0, 0.08);
+}
+.pi-queue-thread {
+  border-left: 2px solid #555;
+  padding-left: 6px;
+}
+.pi-queue-turn {
+  font-size: 12.5px;
+  margin-bottom: 3px;
+}
+.pi-queue-turn--q {
+  color: #ffcc80;
+}
+.pi-queue-turn--a {
+  color: #cfd8dc;
 }
 .pi-queue-text {
   cursor: text;
