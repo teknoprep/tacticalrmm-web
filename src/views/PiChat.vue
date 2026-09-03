@@ -368,12 +368,39 @@
           </div>
         </q-menu>
       </q-btn>
+      <!-- PROMPT QUEUE toggle. The panel itself (right of the chat, or over it on a narrow
+           window) holds every queue control; this button only opens and closes it. -->
+      <q-btn
+        flat
+        dense
+        no-caps
+        :color="queueOpen ? 'primary' : 'white'"
+        icon="playlist_add_check"
+        label="Queue"
+        class="q-mr-sm"
+        data-test="pi-queue-toggle"
+        @click="queueOpen = !queueOpen"
+      >
+        <q-badge
+          v-if="queuePending > 0"
+          floating
+          :color="queuePaused ? 'orange-8' : queueAuto ? 'green-8' : 'blue-grey-7'"
+          :label="queuePending"
+        />
+        <q-tooltip>
+          Prompt queue: write down what to do next; with Auto-Next on each one is sent as
+          soon as the assistant finishes.
+        </q-tooltip>
+      </q-btn>
       <q-badge
         :color="connected ? 'green' : 'red'"
         :label="connected ? 'connected' : 'disconnected'"
       />
     </q-toolbar>
 
+    <!-- body: the chat column, plus the queue panel to its right (over it when narrow) -->
+    <div class="pi-body">
+    <div class="pi-main">
     <!-- messages -->
     <div ref="scrollArea" class="pi-messages q-pa-md">
       <div v-for="(msg, i) in messages" :key="i" class="q-mb-md">
@@ -390,6 +417,9 @@
                  sent it. -->
             <div v-if="msg.via" class="text-caption text-grey-5 text-right q-mb-xs">
               <q-icon name="smartphone" size="14px" /> from {{ msg.via }}
+            </div>
+            <div v-else-if="msg.queued" class="text-caption text-grey-5 text-right q-mb-xs">
+              <q-icon name="playlist_play" size="14px" /> from the queue
             </div>
             <div class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
           </div>
@@ -725,11 +755,181 @@
         @click="abort"
       />
     </div>
+    </div><!-- /pi-main -->
+
+    <!-- PROMPT QUEUE PANEL. Per conversation: it survives refresh, reconnect and
+         "Continue", and a new chat starts with an empty one. The bridge owns the state
+         (queue_state frames); everything here is a request to it. -->
+    <aside
+      v-if="queueOpen"
+      class="pi-queue bg-grey-9"
+      :class="{ 'pi-queue--overlay': queueOverlay }"
+      data-test="pi-queue-panel"
+    >
+      <div class="row items-center q-px-sm q-py-xs pi-queue-head">
+        <q-icon name="playlist_add_check" size="sm" class="q-mr-sm" />
+        <div class="text-subtitle2">Queue</div>
+        <q-badge v-if="queuePending" class="q-ml-sm" color="blue-grey-7" :label="`${queuePending} pending`" />
+        <q-space />
+        <q-btn flat round dense icon="close" @click="queueOpen = false" />
+      </div>
+
+      <div class="q-px-sm q-pb-xs">
+        <q-toggle
+          :model-value="queueAuto"
+          color="green"
+          dense
+          label="Auto-Next"
+          :disable="!connected"
+          data-test="pi-queue-auto"
+          @update:model-value="queueSetAuto"
+        >
+          <q-tooltip max-width="320px">
+            Send the next queued prompt automatically as soon as the assistant finishes a
+            turn. The queue stops by itself when the assistant needs a decision from you,
+            when a turn fails, or when you press Stop.
+          </q-tooltip>
+        </q-toggle>
+        <div v-if="queuePaused" class="pi-queue-paused q-pa-sm q-mt-xs">
+          <div class="row items-center no-wrap">
+            <q-icon name="pause_circle" class="q-mr-xs" />
+            <b>Paused</b>
+            <span class="text-caption text-grey-4 q-ml-xs">
+              &mdash; {{ queuePaused.by === "assistant" ? "the assistant asked:" : "" }}
+            </span>
+          </div>
+          <div class="pi-text text-body2 q-mt-xs">{{ queuePaused.reason }}</div>
+          <div class="text-caption text-grey-5 q-mt-xs" v-if="queuePaused.by === 'assistant'">
+            Answer in the chat and the queue continues after that turn, or Resume to skip the question.
+          </div>
+          <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-mt-xs" @click="queueResume" />
+        </div>
+        <div v-else-if="queueRunningId" class="text-caption text-green-4 q-mt-xs">
+          <q-spinner-dots size="14px" class="q-mr-xs" /> Running a queued prompt&hellip;
+        </div>
+      </div>
+
+      <!-- add -->
+      <div class="q-px-sm q-pb-sm">
+        <q-input
+          v-model="queueNew"
+          type="textarea"
+          autogrow
+          dark
+          dense
+          outlined
+          placeholder="What should happen next? One prompt per entry."
+          :disable="!connected"
+          data-test="pi-queue-new"
+          @keydown.enter.ctrl.prevent="queueAdd"
+        />
+        <div class="row items-center q-mt-xs">
+          <q-checkbox v-model="queueNewCompact" dense size="sm" label="Compact & clear first" :disable="!connected">
+            <q-tooltip max-width="300px">
+              Before this prompt is sent, summarise the conversation and clear the history so
+              it starts from a short summary instead of the whole transcript.
+            </q-tooltip>
+          </q-checkbox>
+          <q-space />
+          <q-btn
+            dense
+            no-caps
+            color="primary"
+            icon="add"
+            label="Add"
+            :disable="!connected || !queueNew.trim()"
+            data-test="pi-queue-add"
+            @click="queueAdd"
+          />
+        </div>
+      </div>
+
+      <!-- actions -->
+      <div class="row items-center q-px-sm q-pb-xs q-gutter-xs">
+        <q-btn dense no-caps outline size="sm" icon="skip_next" label="Run next" :disable="!connected || streaming || !queuePending" @click="queueRunNext">
+          <q-tooltip>Send the first pending prompt now, once, whatever Auto-Next is set to.</q-tooltip>
+        </q-btn>
+        <q-btn v-if="!queuePaused" dense no-caps outline size="sm" icon="pause" label="Pause" :disable="!connected" @click="queuePause" />
+        <q-btn v-else dense no-caps outline size="sm" icon="play_arrow" label="Resume" :disable="!connected" @click="queueResume" />
+        <q-space />
+        <q-btn dense no-caps flat size="sm" icon="done_all" label="Clear done" :disable="!connected || !queueItems.some(i => i.status !== 'pending' && i.status !== 'running')" @click="queueClearDone" />
+        <q-btn dense no-caps flat size="sm" color="negative" icon="delete_sweep" label="Clear all" :disable="!connected || !queueItems.length" @click="queueClearAll" />
+      </div>
+
+      <!-- list -->
+      <div class="pi-queue-list q-px-sm q-pb-sm">
+        <div v-if="!queueItems.length" class="text-caption text-grey-6 q-pa-sm">
+          Nothing queued. Add the next things you want done; they stay with this conversation.
+        </div>
+        <div
+          v-for="(it, idx) in queueItems"
+          :key="it.id"
+          class="pi-queue-item q-pa-xs q-mb-xs"
+          :class="`pi-queue-item--${it.status}`"
+        >
+          <div class="row items-start no-wrap">
+            <q-icon
+              :name="queueStatusIcon(it)"
+              :color="queueStatusColor(it)"
+              size="18px"
+              class="q-mr-xs q-mt-xs"
+            >
+              <q-tooltip>{{ it.status }}{{ it.note ? ` - ${it.note}` : "" }}</q-tooltip>
+            </q-icon>
+            <div class="col" style="min-width: 0">
+              <q-input
+                v-if="queueEditId === it.id"
+                v-model="queueEditText"
+                type="textarea"
+                autogrow
+                dark
+                dense
+                outlined
+                autofocus
+                @keydown.enter.ctrl.prevent="queueSaveEdit(it)"
+                @keydown.esc="queueEditId = null"
+              />
+              <div
+                v-else
+                class="pi-text text-body2 pi-queue-text"
+                :class="{ 'text-grey-5': it.status === 'done' || it.status === 'skipped' }"
+                @dblclick="queueStartEdit(it)"
+              >{{ it.text }}</div>
+              <div class="text-caption text-grey-6">
+                <q-icon v-if="it.compact_first" name="compress" size="12px" class="q-mr-xs">
+                  <q-tooltip>Compact &amp; clear before this one</q-tooltip>
+                </q-icon>
+                <span v-if="it.note">{{ it.note }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="row items-center justify-end no-wrap pi-queue-tools">
+            <template v-if="queueEditId === it.id">
+              <q-btn flat dense size="sm" icon="check" color="green-4" @click="queueSaveEdit(it)"><q-tooltip>Save (Ctrl+Enter)</q-tooltip></q-btn>
+              <q-btn flat dense size="sm" icon="close" @click="queueEditId = null" />
+            </template>
+            <template v-else>
+              <q-btn flat dense size="sm" icon="arrow_upward" :disable="idx === 0 || it.status === 'running'" @click="queueMove(it, -1)" />
+              <q-btn flat dense size="sm" icon="arrow_downward" :disable="idx === queueItems.length - 1 || it.status === 'running'" @click="queueMove(it, 1)" />
+              <q-btn flat dense size="sm" :icon="it.compact_first ? 'compress' : 'expand'" :color="it.compact_first ? 'primary' : 'grey-6'" :disable="it.status === 'running'" @click="queueToggleCompact(it)">
+                <q-tooltip>{{ it.compact_first ? "Compact & clear first: ON" : "Compact & clear first: off" }}</q-tooltip>
+              </q-btn>
+              <q-btn flat dense size="sm" icon="edit" :disable="it.status === 'running'" @click="queueStartEdit(it)" />
+              <q-btn v-if="it.status === 'pending'" flat dense size="sm" icon="remove_done" :disable="it.status === 'running'" @click="queueSetStatus(it, 'skipped')"><q-tooltip>Skip</q-tooltip></q-btn>
+              <q-btn v-else-if="it.status !== 'running'" flat dense size="sm" icon="replay" @click="queueSetStatus(it, 'pending')"><q-tooltip>Queue it again</q-tooltip></q-btn>
+              <q-btn flat dense size="sm" icon="delete" color="negative" :disable="it.status === 'running'" @click="queueRemove(it)" />
+            </template>
+          </div>
+        </div>
+      </div>
+    </aside>
+    </div><!-- /pi-body -->
   </div>
 </template>
 
 <script>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
+import { useQuasar } from "quasar";
 import { useRoute, useRouter } from "vue-router";
 import { getBaseUrl } from "@/boot/axios";
 import {
@@ -960,6 +1160,27 @@ export default {
       if (remoteEnabled.value) return "Remote: waiting";
       return "Remote";
     });
+
+    // --- PROMPT QUEUE ---------------------------------------------------------
+    // The bridge owns the queue (queue.js): everything below mirrors its `queue_state`
+    // frames and sends requests back. Per CONVERSATION - it survives refresh/reconnect/
+    // Continue and a new chat starts empty. The panel's open/closed state is the only
+    // thing kept in this browser.
+    const $q = useQuasar();
+    const queueOpen = ref(localStorage.getItem("pi.queue.open") === "1");
+    watch(queueOpen, (v) => localStorage.setItem("pi.queue.open", v ? "1" : "0"));
+    // Narrow window: the panel floats over the chat instead of squeezing it.
+    const queueOverlay = computed(() => $q.screen.lt.md);
+    const queueItems = ref([]);
+    const queueAuto = ref(false);
+    const queuePaused = ref(null);
+    const queueRunningId = ref(null);
+    const queuePending = ref(0);
+    const queueNew = ref("");
+    const queueNewCompact = ref(false);
+    const queueEditId = ref(null);
+    const queueEditText = ref("");
+    let queueLastPausedAt = null;
 
     const costVisible = ref(false);
     const sessionCost = ref(0);
@@ -1559,6 +1780,35 @@ export default {
                 });
                 scrollToBottom();
               }
+            } else if (m.type === "queue_state") {
+              queueItems.value = Array.isArray(m.items) ? m.items : [];
+              queueAuto.value = !!m.auto_next;
+              queueRunningId.value = m.running_id || null;
+              queuePending.value = Number(m.pending || 0);
+              queuePaused.value = m.paused || null;
+              // A NEW pause goes on the record in the transcript (once), so "why did it
+              // stop" is answered where the tech is looking - and so the alert fires.
+              if (m.paused && m.paused.at !== queueLastPausedAt) {
+                queueLastPausedAt = m.paused.at;
+                messages.value.push({
+                  role: "system",
+                  text: m.paused.by === "assistant"
+                    ? `\u23F8 Queue paused \u2014 the assistant needs your answer: ${m.paused.reason}`
+                    : `\u23F8 Queue paused \u2014 ${m.paused.reason}`,
+                });
+                scrollToBottom();
+                if (m.paused.by === "assistant") queueOpen.value = true;
+              }
+              if (!m.paused) queueLastPausedAt = null;
+            } else if (m.type === "queue_started") {
+              // A queued prompt is going to the model now: show it as the user's own
+              // bubble (it is their words), tagged so the transcript is honest.
+              messages.value.push({ role: "user", text: m.text, queued: true });
+              currentIdx = -1;
+              streaming.value = true;
+              streamStartAt.value = Date.now();
+              markActivity();
+              scrollToBottom();
             } else if (m.type === "cost_update") {
               // Running spend for this conversation (server is the only source of
               // truth; we never compute cost in the browser).
@@ -1668,6 +1918,68 @@ export default {
       ws.send(JSON.stringify({ type: "prompt", message: text }));
       input.value = "";
       scrollToBottom();
+    }
+
+    // Queue actions - each is a request to the bridge; the reply is a queue_state frame.
+    function queueSend(frame) {
+      if (!ws || !connected.value) return;
+      ws.send(JSON.stringify(frame));
+    }
+    function queueAdd() {
+      const text = queueNew.value.trim();
+      if (!text) return;
+      queueSend({ type: "queue_add", text, compact_first: queueNewCompact.value });
+      queueNew.value = "";
+      queueNewCompact.value = false;
+    }
+    function queueSetAuto(v) { queueSend({ type: "queue_set_auto", value: !!v }); }
+    function queuePause() { queueSend({ type: "queue_pause" }); }
+    function queueResume() { queueSend({ type: "queue_resume" }); }
+    function queueRunNext() { queueSend({ type: "queue_run_next" }); }
+    function queueClearDone() { queueSend({ type: "queue_clear_done" }); }
+    function queueClearAll() {
+      $q.dialog({
+        dark: true,
+        title: "Clear the queue?",
+        message: "Every queued prompt for this conversation is removed. The chat itself is untouched.",
+        cancel: true,
+        ok: { label: "Clear", color: "negative", flat: true },
+      }).onOk(() => queueSend({ type: "queue_clear" }));
+    }
+    function queueRemove(it) { queueSend({ type: "queue_remove", id: it.id }); }
+    function queueSetStatus(it, status) { queueSend({ type: "queue_update", id: it.id, status }); }
+    function queueToggleCompact(it) { queueSend({ type: "queue_update", id: it.id, compact_first: !it.compact_first }); }
+    function queueStartEdit(it) {
+      if (it.status === "running") return;
+      queueEditId.value = it.id;
+      queueEditText.value = it.text;
+    }
+    function queueSaveEdit(it) {
+      const text = queueEditText.value.trim();
+      if (text && text !== it.text) queueSend({ type: "queue_update", id: it.id, text });
+      queueEditId.value = null;
+    }
+    function queueMove(it, dir) {
+      const ids = queueItems.value.map((i) => i.id);
+      const i = ids.indexOf(it.id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      queueSend({ type: "queue_reorder", ids });
+    }
+    function queueStatusIcon(it) {
+      return {
+        pending: "radio_button_unchecked",
+        running: "play_circle",
+        done: "check_circle",
+        failed: "error",
+        skipped: "remove_done",
+      }[it.status] || "help";
+    }
+    function queueStatusColor(it) {
+      return {
+        pending: "grey-5", running: "green-4", done: "green-6", failed: "red-4", skipped: "grey-6",
+      }[it.status] || "grey-5";
     }
 
     function abort() {
@@ -1877,6 +2189,33 @@ export default {
       windowCost,
       windowTurns,
       windowScope,
+      // prompt queue
+      queueOpen,
+      queueOverlay,
+      queueItems,
+      queueAuto,
+      queuePaused,
+      queueRunningId,
+      queuePending,
+      queueNew,
+      queueNewCompact,
+      queueEditId,
+      queueEditText,
+      queueAdd,
+      queueSetAuto,
+      queuePause,
+      queueResume,
+      queueRunNext,
+      queueClearDone,
+      queueClearAll,
+      queueRemove,
+      queueSetStatus,
+      queueToggleCompact,
+      queueStartEdit,
+      queueSaveEdit,
+      queueMove,
+      queueStatusIcon,
+      queueStatusColor,
       fmtMoney,
       fmtTokens,
       connectionLost,
@@ -1986,10 +2325,77 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.pi-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  position: relative;
+}
+.pi-main {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .pi-messages {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
+}
+/* Prompt queue panel: a column to the right of the chat ... */
+.pi-queue {
+  flex: 0 0 400px;
+  width: 400px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #3a3a3a;
+}
+/* ... or, when the window is too narrow to share, floating over it. */
+.pi-queue--overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100%);
+  z-index: 5;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.5);
+}
+.pi-queue-head {
+  border-bottom: 1px solid #3a3a3a;
+}
+.pi-queue-paused {
+  background: rgba(255, 152, 0, 0.12);
+  border: 1px solid rgba(255, 152, 0, 0.5);
+  border-radius: 6px;
+}
+.pi-queue-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.pi-queue-item {
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  background: #262626;
+}
+.pi-queue-item--running {
+  border-color: #4caf50;
+}
+.pi-queue-item--failed {
+  border-color: #e53935;
+}
+.pi-queue-text {
+  cursor: text;
+  word-break: break-word;
+}
+.pi-queue-tools {
+  opacity: 0.55;
+}
+.pi-queue-item:hover .pi-queue-tools {
+  opacity: 1;
 }
 .pi-user-row {
   display: flex;
