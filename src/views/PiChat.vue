@@ -1690,12 +1690,49 @@ export default {
       }
     }
 
-    function connect({ model_id, resume, group_id } = {}) {
+    // AUTO-RECONNECT. The bridge closes a socket it considers idle (code 1000 "idle"),
+    // and networks drop them for reasons of their own. Neither should cost the tech a
+    // page refresh: the server-side session survives the socket, so simply reopening
+    // (resume = current session) puts the same conversation back on screen. Only a close
+    // WE asked for (switching model/group, leaving the page) is left alone.
+    let intentionalClose = false;
+    let unmounted = false;
+    let reconnectTimer = null;
+    let reconnectAttempts = 0;
+    const RECONNECT_MAX_ATTEMPTS = 6;
+    function scheduleReconnect(code) {
+      if (unmounted || reconnectTimer) return;
+      if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+        connectionLost.value = true;
+        return;
+      }
+      // The server's own idle close is not a fault - come straight back. Anything else
+      // backs off: 1s, 2s, 4s ... capped at 30s.
+      const idle = code === 1000;
+      const delay = idle ? 250 : Math.min(30000, 1000 * 2 ** reconnectAttempts);
+      reconnectAttempts++;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (unmounted) return;
+        connect({
+          resume: curSessionId,
+          model_id: selectedModel.value,
+          group_id: selectedGroup.value,
+        });
+      }, delay);
+    }
+
+    // `fresh: true` = deliberately start a NEW conversation (New chat, AI Resolve). Without
+    // it the bridge carries on the last conversation about this machine, which is what a
+    // refresh, a reconnect and a model switch all want.
+    function connect({ model_id, resume, group_id, fresh } = {}) {
       // close any existing
       if (ws) {
+        intentionalClose = true;
         try { ws.close(); } catch (e) { /* noop */ }
         ws = null;
       }
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       let sendGroup = group_id;
       let sendModel = model_id;
       // A refresh / new window must reopen on what THIS person last picked, not the
@@ -1721,11 +1758,15 @@ export default {
             machines: multiMachines,
             ...(sendModel ? { model_id: sendModel } : {}),
             ...(resume ? { resume_session: resume } : {}),
+            ...(fresh ? { new_session: true } : {}),
             ...groupPayload,
           })
         : createPiSession(agentId, {
             ...(sendModel ? { model_id: sendModel } : {}),
             ...(resume ? { resume_session: resume } : {}),
+            // An AI Resolve window seeds its own diagnostic prompt about one finding, so
+            // it starts clean rather than inheriting whatever was last discussed here.
+            ...(fresh || resolveRun ? { new_session: true } : {}),
             ...(resolveRun ? { read_only: true } : {}),
             ...groupPayload,
           });
@@ -1759,22 +1800,30 @@ export default {
 
           const url = `${wsBase()}/pi/ws/${data.token}/`;
           ws = new WebSocket(url);
+          const sock = ws;
+          intentionalClose = false;
           ws.onopen = () => {
             connected.value = true;
             connectionLost.value = false;
+            reconnectAttempts = 0;
             queueFirstState = true;
           };
-          ws.onclose = () => {
+          ws.onclose = (evt) => {
+            // A socket we already replaced has nothing to say about the current one.
+            if (sock !== ws) return;
             connected.value = false;
-            // if we were mid-response, surface it instead of silently stopping
-            if (streaming.value) {
-              connectionLost.value = true;
+            const wasStreaming = streaming.value;
+            streaming.value = false;
+            if (intentionalClose || unmounted) return;
+            // Not asked for: reopen the same session. If we were mid-response, say so
+            // once - the reconnect hydrates the transcript, so nothing is lost.
+            if (wasStreaming && reconnectAttempts === 0) {
               messages.value.push({
                 role: "system",
-                text: "⚠ Connection lost while the assistant was working. Click Reconnect to resume this conversation.",
+                text: "⚠ Connection dropped while the assistant was working — reconnecting…",
               });
             }
-            streaming.value = false;
+            scheduleReconnect(evt && evt.code);
           };
           ws.onerror = () => {
             connected.value = false;
@@ -1784,6 +1833,12 @@ export default {
             try { m = JSON.parse(evt.data); } catch (e) { return; }
             markActivity();
             if (m.type === "ready") {
+              // Notes about how this window opened. COLLECTED, not pushed: hydrating the
+              // transcript below replaces messages[] wholesale, so anything pushed before
+              // it was silently thrown away - which is why "Resumed on <model>" was never
+              // actually seen. They go in after the history, where they read as a header
+              // for what happens next.
+              const notes = [];
               if (m.auto_approve !== undefined) autoApprove.value = !!m.auto_approve;
               curSessionId = m.session_id || curSessionId;
               readOnly.value = !!m.read_only;
@@ -1811,12 +1866,12 @@ export default {
               // back. Both are stated: a technician who believes Write mode is still on
               // will not understand the refusals they start getting.
               if (m.model_source === "remembered") {
-                messages.value.push({
+                notes.push({
                   role: "system",
                   text: `Resumed on ${m.model.display} \u2014 the model this chat was last using.`,
                 });
               } else if (m.model_remembered_denied) {
-                messages.value.push({
+                notes.push({
                   role: "system",
                   text:
                     `This chat was last using ${m.model_remembered_denied}, which is not available ` +
@@ -1824,13 +1879,13 @@ export default {
                 });
               }
               if (m.switches_restored?.length) {
-                messages.value.push({
+                notes.push({
                   role: "system",
                   text: `Restored from last time: ${m.switches_restored.join(", ")}.`,
                 });
               }
               if (m.switches_denied?.length) {
-                messages.value.push({
+                notes.push({
                   role: "system",
                   text:
                     `${m.switches_denied.join(", ")} was on when this window was last used, but ` +
@@ -1846,7 +1901,7 @@ export default {
               contextWindow.value = Number(m.context_window || 0);
               if (m.operator_enabled && Array.isArray(m.operator_machines) && m.operator_machines.length) {
                 const names = m.operator_machines.map((x) => x.hostname || x.agent_id).filter(Boolean).join(", ");
-                messages.value.push({
+                notes.push({
                   role: "system",
                   text: `Desktop Operator available on: ${names}. Just tell me what to open/click/fill on that workstation (no passwords, no save/delete).`,
                 });
@@ -1904,6 +1959,18 @@ export default {
                   }
                 }
               });
+              // The window picked the conversation up by itself (refresh, reconnect,
+              // model switch). Say so once: unannounced history is as unsettling as
+              // history that vanished, and it names the way out.
+              if (m.resumed === "auto" && messages.value.length) {
+                notes.push({
+                  role: "system",
+                  text:
+                    "Continuing the last conversation about this machine \u2014 the assistant still " +
+                    "has this context. Menu \u203a New chat starts a fresh one.",
+                });
+              }
+              if (notes.length) messages.value.push(...notes);
               scrollToBottom();
             } else if (m.type === "agent_event") {
               handleAgentEvent(m.event);
@@ -2124,6 +2191,8 @@ export default {
 
     function reconnect() {
       connectionLost.value = false;
+      reconnectAttempts = 0;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       connect({
         resume: curSessionId,
         model_id: selectedModel.value,
@@ -2424,8 +2493,8 @@ export default {
     }
 
     function startNewChat() {
-      if (selectedGroup.value != null) connect({ group_id: selectedGroup.value });
-      else connect({ model_id: selectedModel.value, group_id: null });
+      if (selectedGroup.value != null) connect({ group_id: selectedGroup.value, fresh: true });
+      else connect({ model_id: selectedModel.value, group_id: null, fresh: true });
     }
 
     // --- multi-machine setup dialog ----------------------------------------
@@ -2488,7 +2557,10 @@ export default {
       }, 1000);
     });
     onBeforeUnmount(() => {
+      unmounted = true;
+      intentionalClose = true;
       if (tickTimer) clearInterval(tickTimer);
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       if (ws) try { ws.close(); } catch (e) { /* noop */ }
     });
 
