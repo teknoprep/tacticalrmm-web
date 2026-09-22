@@ -106,6 +106,26 @@
             <q-badge :color="sourceColor(props.row.source)" :label="props.row.sourceLabel" />
           </q-td>
         </template>
+        <template #body-cell-cost="props">
+          <q-td :props="props" class="no-wrap">
+            <span v-if="props.row.costTurns" :class="props.row.costRecovered ? 'text-grey-6' : ''">
+              {{ money(props.row.cost) }}
+              <q-tooltip :delay="300" max-width="360px">
+                {{ props.row.costTurns }} billed turn(s)
+                <template v-if="props.row.costModels && props.row.costModels.length">
+                  &middot; {{ props.row.costModels.join(", ") }}
+                </template>
+                <br />
+                <template v-if="props.row.costRecovered">
+                  Recovered from the session transcript, so it is attributed only as
+                  well as that file allowed.
+                </template>
+                <template v-else>Recorded live, as each turn was billed.</template>
+              </q-tooltip>
+            </span>
+            <span v-else class="text-grey-6">&mdash;</span>
+          </q-td>
+        </template>
         <template #body-cell-status="props">
           <q-td :props="props">
             <q-badge
@@ -118,8 +138,15 @@
         </template>
         <template #body-cell-actions="props">
           <q-td :props="props">
+            <!-- Nothing to continue or delete once the transcript is gone: the row is
+                 here for the money, which the ledger keeps forever. -->
+            <q-badge
+              v-if="props.row.deleted"
+              color="blue-grey-7"
+              label="transcript deleted"
+            />
             <q-btn
-              v-if="props.row.source === 'chat'"
+              v-else-if="props.row.source === 'chat'"
               dense
               flat
               size="sm"
@@ -130,7 +157,7 @@
               @click="continueChat(props.row)"
             />
             <q-btn
-              v-else
+              v-else-if="props.row.source !== 'chat'"
               dense
               flat
               size="sm"
@@ -140,7 +167,7 @@
               @click="viewRun(props.row)"
             />
             <q-btn
-              v-if="props.row.source === 'chat'"
+              v-if="props.row.source === 'chat' && !props.row.deleted"
               dense
               flat
               size="sm"
@@ -303,6 +330,11 @@ export default {
           classes: "ellipsis",
         },
         {
+          name: "cost", label: "Cost", field: "cost", align: "right", sortable: true,
+          style: "width: 90px; max-width: 90px", headerStyle: "width: 90px; max-width: 90px",
+          classes: "no-wrap",
+        },
+        {
           name: "when", label: "When", field: "when", align: "left", sortable: true,
           style: "width: 150px; max-width: 150px", headerStyle: "width: 150px; max-width: 150px",
           classes: "no-wrap",
@@ -326,6 +358,15 @@ export default {
     function statusColor(s) {
       return { ok: "green", warning: "orange", alert: "red", error: "grey", running: "blue" }[s] || "grey";
     }
+    // Sub-cent chats are the common case, and rounding them all to "$0.00" makes a
+    // column of real money look like a column of nothing.
+    function money(v) {
+      const n = Number(v || 0);
+      if (!n) return "$0.00";
+      if (n < 0.01) return `$${n.toFixed(4)}`;
+      return `$${n.toFixed(2)}`;
+    }
+
     function formatTime(ts) {
       try {
         return ts ? new Date(ts).toLocaleString() : "";
@@ -343,12 +384,22 @@ export default {
         source: "chat",
         sourceLabel: s.multi ? "Chat (multi)" : "Chat",
         label: s.label || "",
-        summary: s.last_message || s.name || "Chat",
+        summary: s.transcript_deleted
+          ? "Transcript deleted \u2014 spend kept"
+          : s.last_message || s.name || "Chat",
         user: s.user || "",
         when: s.last_activity || s.started,
         status: "",
         multi: !!s.multi,
         machines: s.machines || null,
+        // Money comes from the append-only ledger (AISpendEntry), never from the
+        // transcript: the transcript is deletable and the bill is not. A conversation
+        // whose transcript is gone still appears here with what it cost.
+        cost: Number(s.cost || 0),
+        costTurns: Number(s.cost_turns || 0),
+        costModels: s.cost_models || [],
+        costRecovered: !!s.cost_recovered,
+        deleted: !!s.transcript_deleted,
       };
     }
     function runRowFrom(r) {
@@ -464,6 +515,7 @@ export default {
       columns,
       sourceColor,
       statusColor,
+      money,
       formatTime,
       load,
       continueChat,

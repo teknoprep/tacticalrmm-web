@@ -393,6 +393,10 @@ export default {
         label: "AI Auto-work Readiness — would it work each ticket alone",
         value: "autowork_readiness",
       },
+      {
+        label: "Ticket Automation Subjects — what to automate next (approve by email)",
+        value: "automation_subjects",
+      },
     ];
     const cadenceOptions = [
       { label: "Every day", value: "daily" },
