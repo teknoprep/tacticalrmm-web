@@ -1,7 +1,19 @@
 <template>
-  <div class="pichat bg-grey-10 text-white">
+  <div ref="root" class="pichat bg-grey-10 text-white">
     <!-- toolbar -->
-    <q-toolbar class="bg-grey-9 text-white q-px-sm">
+    <q-toolbar class="bg-grey-9 text-white q-px-sm pi-toolbar">
+      <!-- On a phone (the installed app, or any narrow screen) there is no window to close:
+           this is how you get back to the inbox. -->
+      <q-btn
+        v-if="isPhone"
+        flat
+        dense
+        round
+        icon="arrow_back"
+        class="q-mr-xs"
+        aria-label="Back to inbox"
+        @click="backToInbox"
+      />
       <!-- ☰ Options menu. Every switch and session action lives HERE now - the bar keeps
            only what you read at a glance (label, cost, model, alerts, connection). -->
       <q-btn
@@ -88,26 +100,16 @@
 
             <q-separator dark class="q-my-sm" />
             <q-item-label header class="text-grey-5">Session</q-item-label>
-            <q-item
-              v-if="remoteAllowed"
-              clickable
-              v-close-popup
-              :disable="remoteBusy"
-              @click="toggleRemote"
-            >
-              <q-item-section avatar>
-                <q-icon
-                  :name="remoteState === 'paired' ? 'phonelink' : 'phonelink_off'"
-                  :color="remoteState === 'paired' ? 'light-green' : remoteEnabled ? 'amber' : 'grey-5'"
-                />
-              </q-item-section>
+            <!-- Mobile only: keep the session running while this phone is in the background
+                 (auto-on when the phone drives; this is the manual switch). -->
+            <q-item v-if="isPhone" tag="label" dense :disable="!isDriver">
+              <q-item-section avatar><q-icon name="push_pin" /></q-item-section>
               <q-item-section>
-                <q-item-label>{{ remoteLabel }}</q-item-label>
-                <q-item-label caption>
-                  <span v-if="remoteState === 'paired'">Paired with {{ remoteDevice }} &mdash; live on that phone</span>
-                  <span v-else-if="remoteEnabled">Waiting for a phone &mdash; click to show the code</span>
-                  <span v-else>Work this same conversation from your phone</span>
-                </q-item-label>
+                <q-item-label>Pin session</q-item-label>
+                <q-item-label caption>Keep running while this phone is in the background</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle :model-value="pinned" dense :disable="!isDriver || !connected" @update:model-value="setPin" />
               </q-item-section>
             </q-item>
             <q-item v-if="!isDecision" clickable v-close-popup @click="openMachinesDialog">
@@ -171,6 +173,14 @@
       <div class="column pi-title q-mr-sm">
         <div class="text-subtitle2 ellipsis">
           Pi.dev &mdash; {{ hostname || (isMulti ? "multi-machine" : agentId) }}
+          <!-- The ticket's CURRENT helpdesk stage (refreshed after every turn). -->
+          <q-badge
+            v-if="isDecision && ticketStage"
+            :color="stageColor(ticketStage)"
+            :label="ticketStage"
+            class="q-ml-xs"
+            style="vertical-align: middle"
+          />
         </div>
         <div class="text-caption text-grey-5 ellipsis">
           {{ clientSite }}
@@ -402,7 +412,32 @@
     <div class="pi-body">
     <div class="pi-main">
     <!-- messages -->
-    <div ref="scrollArea" class="pi-messages q-pa-md">
+    <!-- SEAT BANNER. Only shown when it says something: someone else driving, or
+         someone asking for the seat. -->
+    <q-banner v-if="seatTaken" dense class="bg-blue-grey-9 text-grey-3 q-px-md">
+      <template #avatar><q-icon name="visibility" color="amber-6" /></template>
+      Read-only &mdash; <b>{{ presence.owner.display }}</b> is driving this session{{ presence.owner_connected ? '' : ' (disconnected; seat held)' }}.
+      <span v-if="presence.viewers && presence.viewers.length > 1" class="text-grey-5">
+        &middot; {{ presence.viewers.length }} watching
+      </span>
+    </q-banner>
+    <q-banner v-else-if="presence && presence.viewers && presence.viewers.length > 1" dense class="bg-grey-9 text-grey-4 q-px-md">
+      <template #avatar><q-icon name="groups" color="light-green-6" /></template>
+      You are driving &middot; {{ presence.viewers.length - 1 }} other{{ presence.viewers.length > 2 ? 's' : '' }} watching read-only.
+    </q-banner>
+    <q-banner v-if="takeoverAsk" dense class="bg-amber-9 text-black q-px-md">
+      <template #avatar><q-icon name="sports_esports" /></template>
+      <b>{{ takeoverAsk.from.display }}</b> is asking to take over this session. No answer in {{ takeoverAsk.timeout_s }}s means no.
+      <template #action>
+        <q-btn flat dense no-caps label="Hand over" @click="answerTakeover(true)" />
+        <q-btn flat dense no-caps label="Keep it" @click="answerTakeover(false)" />
+      </template>
+    </q-banner>
+    <!-- SCROLL PAUSE. `@scroll` decides, on every scroll, whether this transcript is
+         still "at the bottom" (within 1% of the scrollable height). While it is not,
+         nothing auto-scrolls: what you are reading, selecting or copying stays exactly
+         where it is, however much the AI writes underneath. See onTranscriptScroll(). -->
+    <div ref="scrollArea" class="pi-messages q-pa-md" @scroll.passive="onTranscriptScroll">
       <div v-for="(msg, i) in messages" :key="i" class="q-mb-md">
         <!-- user -->
         <div v-if="msg.role === 'user'" class="pi-user-row">
@@ -416,12 +451,30 @@
                  that arrived from a phone should not read as if the person at the desk
                  sent it. -->
             <div v-if="msg.via" class="text-caption text-grey-5 text-right q-mb-xs">
-              <q-icon name="smartphone" size="14px" /> from {{ msg.via }}
+              <q-icon name="person" size="14px" /> {{ msg.via }}
             </div>
             <div v-else-if="msg.queued" class="text-caption text-grey-5 text-right q-mb-xs">
               <q-icon name="playlist_play" size="14px" /> {{ msg.queuedReply ? "answered in the queue" : "from the queue" }}
             </div>
-            <div class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
+            <!-- Attachments that went with this message. Thumbnails for images (click to
+                 open full size) and a chip per text file - the file body itself is in the
+                 model's copy of the turn, not in the bubble. -->
+            <div v-if="msg.files && msg.files.length" class="pi-attach-row row justify-end q-gutter-xs q-mb-xs">
+              <template v-for="(f, fi) in msg.files" :key="fi">
+                <img
+                  v-if="f.preview"
+                  :src="f.preview"
+                  class="pi-attach-thumb"
+                  :title="`${f.name} (${humanSize(f.size)}) - click to open`"
+                  @click="openPreview(f)"
+                />
+                <q-chip v-else dense square color="blue-grey-8" text-color="white" icon="description">
+                  {{ f.name }}
+                  <span class="text-grey-4 q-ml-xs">{{ humanSize(f.size) }}</span>
+                </q-chip>
+              </template>
+            </div>
+            <div v-if="msg.text" class="pi-bubble pi-user pi-text">{{ msg.text }}</div>
           </div>
         </div>
         <!-- assistant -->
@@ -479,6 +532,28 @@
           no-caps
           @click="abort"
         />
+      </div>
+      <!-- HELD - shown only while the view is paused above the bottom. Sticky INSIDE the
+           scroller, so it sits over the newest text without being part of the flow (and
+           without needing a wrapper that would change the layout). It says what is being
+           held back, because a paused transcript with no explanation reads as a stuck one. -->
+      <div v-if="!pinnedToBottom" class="pi-scroll-held">
+        <q-btn
+          dense
+          no-caps
+          unelevated
+          color="blue-grey-8"
+          text-color="white"
+          icon="arrow_downward"
+          :label="heldLabel"
+          data-test="pi-jump-latest"
+          @click="jumpToLatest"
+        >
+          <q-tooltip max-width="320px">
+            You have scrolled up, so the view is held here while you read or copy.
+            Click (or scroll to the bottom) to follow the conversation live again.
+          </q-tooltip>
+        </q-btn>
       </div>
     </div>
 
@@ -603,55 +678,6 @@
       </q-card>
     </q-dialog>
 
-    <!-- Remote (mobile) pairing -->
-    <q-dialog v-model="remoteDialog">
-      <q-card dark class="bg-grey-9" style="width: 420px; max-width: 95vw">
-        <q-card-section class="row items-center q-pb-none">
-          <q-icon name="phonelink" size="sm" class="q-mr-sm" />
-          <div class="text-h6">Pair a phone</div>
-          <q-space />
-          <q-btn icon="close" flat round dense v-close-popup />
-        </q-card-section>
-        <q-card-section class="text-center">
-          <div v-if="remotePairingUri">
-            <div class="bg-white q-pa-md inline-block" style="border-radius: 6px">
-              <img :src="remoteQr" alt="Pairing QR code" style="width: 240px; height: 240px" />
-            </div>
-            <div class="text-caption text-grey-5 q-mt-md">
-              Scan with the <strong>Remote Pi</strong> app. The code is valid for about a
-              minute and can only be used once &mdash; press Remote again for a fresh one.
-            </div>
-            <q-input
-              dense
-              dark
-              outlined
-              readonly
-              class="q-mt-sm"
-              :model-value="remotePairingUri"
-              label="Or paste this into the app"
-            >
-              <template #append>
-                <q-btn flat dense round icon="content_copy" @click="copyPairingUri" />
-              </template>
-            </q-input>
-          </div>
-          <div v-else class="q-py-lg">
-            <q-spinner size="32px" />
-            <div class="text-caption text-grey-5 q-mt-sm">Opening the relay&hellip;</div>
-          </div>
-        </q-card-section>
-        <q-card-section v-if="remoteDevices.length" class="q-pt-none">
-          <div class="text-caption text-grey-5">
-            Already paired: {{ remoteDevices.map((d) => d.name).join(", ") }}. A phone you
-            have paired before reconnects on its own &mdash; no scan needed.
-          </div>
-        </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat no-caps label="Turn Remote off" color="grey-5" @click="disableRemote" />
-          <q-btn flat no-caps label="Done" v-close-popup />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
 
     <!-- connection lost banner -->
     <q-banner v-if="connectionLost" class="bg-red-9 text-white">
@@ -687,7 +713,48 @@
     </q-banner>
 
     <!-- input -->
-    <div class="bg-grey-9 q-pa-sm row items-end relative-position">
+    <div
+      class="pi-composer bg-grey-9 q-pa-sm relative-position"
+      :class="{ 'pi-drop-active': dragOver }"
+      @dragenter.prevent="onDragEnter"
+      @dragover.prevent
+      @dragleave.prevent="onDragLeave"
+      @drop.prevent="onDrop"
+    >
+      <!-- Drop target feedback. Covers the composer only: dropping a file on the
+           transcript should not silently do nothing, so the whole composer lights up
+           and says what will happen. -->
+      <div v-if="dragOver" class="pi-drop-overlay column flex-center">
+        <q-icon name="upload_file" size="28px" />
+        <div class="text-caption q-mt-xs">Drop to attach</div>
+      </div>
+
+      <!-- Files staged for the NEXT message. Nothing is uploaded until Send. -->
+      <div v-if="pendingFiles.length" class="row items-center q-gutter-xs q-mb-xs">
+        <q-chip
+          v-for="f in pendingFiles"
+          :key="f.id"
+          dense
+          square
+          removable
+          color="blue-grey-7"
+          text-color="white"
+          :icon="fileIcon(f)"
+          @remove="removeFile(f.id)"
+        >
+          <q-avatar v-if="f.preview" square>
+            <img :src="f.preview" />
+          </q-avatar>
+          {{ f.name }}
+          <span class="text-grey-4 q-ml-xs">{{ humanSize(f.size) }}</span>
+        </q-chip>
+        <q-btn flat dense no-caps size="sm" color="grey-5" label="Clear" @click="clearFiles" />
+        <div class="text-caption text-grey-6">
+          {{ humanSize(pendingBytes) }} of {{ humanSize(attachMax.totalBytes) }}
+        </div>
+      </div>
+
+      <div class="row items-end relative-position">
       <!-- SLASH COMMANDS. The list comes from the bridge (`ready.commands`), never from
            here, so it can only offer what this role may actually use. A switch the role
            does not carry is still listed, greyed, with the reason - hiding it makes a
@@ -719,6 +786,33 @@
           Tab or Enter completes &mdash; Esc dismisses
         </div>
       </div>
+      <!-- Attach. Hidden native input; the button and drag-and-drop both drive it. -->
+      <input
+        ref="fileInput"
+        type="file"
+        multiple
+        class="hidden"
+        :accept="imagesSupported ? undefined : '.txt,.log,.csv,.json,.xml,.md,.ps1,.reg,.ini,.conf,.yaml,.yml,.html,.sql,text/*'"
+        @change="onFilePicked"
+      />
+      <q-btn
+        v-if="attachEnabled"
+        flat
+        dense
+        round
+        icon="attach_file"
+        color="grey-4"
+        class="q-mr-xs"
+        :disable="!connected"
+        @click="pickFiles"
+      >
+        <q-tooltip>
+          Attach a screenshot or log file &mdash; or drag one here, or paste an image.
+          <template v-if="!imagesSupported">
+            <br />This model reads text files only.
+          </template>
+        </q-tooltip>
+      </q-btn>
       <q-input
         v-model="input"
         type="textarea"
@@ -726,23 +820,45 @@
         dark
         dense
         outlined
-        :placeholder="isMulti
-          ? 'Tell Pi what to do across these machines...'
-          : 'Ask about this device, or type / for commands...'"
+        :placeholder="seatTaken
+          ? `Read-only - ${presence.owner.display} is driving this session`
+          : isMulti
+            ? 'Tell Pi what to do across these machines...'
+            : 'Ask about this device, or type / for commands...'"
         class="col"
-        :disable="!connected"
+        :disable="!connected || seatTaken"
+        @paste="onPaste"
         @keydown.enter.exact.prevent="onEnter"
         @keydown.tab="onCmdTab"
         @keydown.down="onCmdArrow(1, $event)"
         @keydown.up="onCmdArrow(-1, $event)"
         @keydown.esc="cmdDismissed = true"
       />
+      <!-- A viewer gets Take over where the driver gets Send. -->
       <q-btn
-        v-if="!streaming"
+        v-if="seatTaken"
+        color="amber-8"
+        icon="sports_esports"
+        label="Take over"
+        no-caps
+        class="q-ml-sm"
+        :disable="!connected || !canTakeOver"
+        :loading="takeoverPending"
+        @click="requestTakeover"
+      >
+        <q-tooltip>
+          <template v-if="canTakeOver">
+            {{ presence.you.needs_consent ? `Ask ${presence.owner.display} to hand this session to you` : `Take the seat from ${presence.owner.display} (they keep watching)` }}
+          </template>
+          <template v-else>Your role cannot take over a session someone else is driving</template>
+        </q-tooltip>
+      </q-btn>
+      <q-btn
+        v-else-if="!streaming"
         color="primary"
         icon="send"
         class="q-ml-sm"
-        :disable="!connected || !input.trim()"
+        :disable="!connected || (!input.trim() && !pendingFiles.length)"
         @click="send"
       />
       <q-btn
@@ -754,7 +870,22 @@
         class="q-ml-sm"
         @click="abort"
       />
+      </div><!-- /composer row -->
     </div>
+
+    <!-- Full-size look at an attached image, from the transcript's own copy. -->
+    <q-dialog v-model="previewOpen">
+      <q-card dark class="bg-grey-10">
+        <q-card-section class="row items-center q-py-sm">
+          <div class="text-subtitle2">{{ previewFile.name }}</div>
+          <q-space />
+          <q-btn v-close-popup flat dense round icon="close" />
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <img :src="previewFile.preview" style="max-width: 84vw; max-height: 78vh" />
+        </q-card-section>
+      </q-card>
+    </q-dialog>
     </div><!-- /pi-main -->
 
     <!-- PROMPT QUEUE PANEL. Per conversation: it survives refresh, reconnect and
@@ -783,8 +914,17 @@
           {{ queuePending }} pending<template v-if="queueItems.length !== queuePending"> &middot; {{ queueItems.length }} total</template>
         </span>
         <q-space />
-        <q-btn flat dense no-caps icon="history" label="History" :disable="!queueHistory.length" data-test="pi-queue-history" @click="queueHistoryOpen = true">
-          <q-tooltip>Everything this queue has done and how it went. For you only - never sent to the AI.</q-tooltip>
+        <q-btn
+          flat dense no-caps icon="history"
+          :label="queueHistoryCount ? `History (${queueHistoryCount})` : 'History'"
+          :disable="!queueHistoryCount"
+          data-test="pi-queue-history"
+          @click="openQueueHistory"
+        >
+          <q-tooltip>
+            Every prompt this conversation has been given &mdash; typed, queued or from a
+            phone &mdash; and everything the queue did. For you only: never sent to the AI.
+          </q-tooltip>
         </q-btn>
         <q-btn flat round dense icon="more_vert" :disable="!connected" data-test="pi-queue-menu">
           <q-tooltip>More</q-tooltip>
@@ -834,7 +974,8 @@
         >
           <q-tooltip max-width="300px">
             Drop each prompt from the list once it has run. Anything that failed, was
-            skipped, or asked you a question stays.
+            skipped, or asked you a question stays. On by default; turn it off and this
+            chat window remembers that.
           </q-tooltip>
         </q-toggle>
       </div>
@@ -927,6 +1068,36 @@
             data-test="pi-queue-new"
             @keydown.enter.exact.prevent="queueAdd"
           />
+          <!-- Attach to the QUEUED prompt. Same pipeline as the composer (same caps, same
+               downscale, same refusals) - the files travel with the item and are handed to
+               the model when that item runs, which may be an hour later. -->
+          <input
+            ref="queueFileInput"
+            type="file"
+            multiple
+            class="hidden"
+            :accept="imagesSupported ? undefined : '.txt,.log,.csv,.json,.xml,.md,.ps1,.reg,.ini,.conf,.yaml,.yml,.html,.sql,text/*'"
+            @change="onQueueFilePicked"
+          />
+          <q-btn
+            v-if="attachEnabled"
+            flat
+            dense
+            round
+            icon="attach_file"
+            :color="queueFiles.length ? 'primary' : 'grey-4'"
+            class="q-ml-xs"
+            :disable="!connected"
+            data-test="pi-queue-attach"
+            @click="pickQueueFiles"
+          >
+            <q-badge v-if="queueFiles.length" floating color="primary">{{ queueFiles.length }}</q-badge>
+            <q-tooltip>
+              Attach a screenshot or log file to this queued prompt &mdash; it is sent with it when it runs.
+              <br />Type what you want done with it too: a file on its own is evidence, not an instruction.
+              <template v-if="!imagesSupported"><br />This model reads text files only.</template>
+            </q-tooltip>
+          </q-btn>
           <q-btn
             round
             unelevated
@@ -939,6 +1110,22 @@
           >
             <q-tooltip>Add to the queue</q-tooltip>
           </q-btn>
+        </div>
+        <!-- What is attached to the prompt being composed, removable before it is added. -->
+        <div v-if="queueFiles.length" class="row items-center q-gutter-xs q-mt-xs">
+          <q-chip
+            v-for="f in queueFiles"
+            :key="f.id"
+            dense
+            removable
+            color="blue-grey-8"
+            text-color="white"
+            :icon="f.preview ? 'image' : 'description'"
+            @remove="removeQueueFile(f.id)"
+          >
+            <img v-if="f.preview" :src="f.preview" class="pi-queue-thumb q-mr-xs" />
+            {{ f.name }} <span class="text-grey-4 q-ml-xs">{{ humanSize(f.size) }}</span>
+          </q-chip>
         </div>
         <q-checkbox v-model="queueNewCompact" dense size="sm" label="Compact first" class="q-mt-xs" :disable="!connected">
           <q-tooltip max-width="300px">
@@ -987,6 +1174,22 @@
           :disable="!connected"
           @click="queueResume"
         />
+        <!-- Interrupted work is usually resumed with a TWEAK ("...and skip the bit that
+             failed"), so the edit is offered right next to Resume rather than hidden
+             behind a per-item menu further down the panel. -->
+        <q-btn
+          v-if="queuePaused && queueHeadPending"
+          dense
+          no-caps
+          outline
+          color="blue-4"
+          icon="edit"
+          label="Edit"
+          :disable="!connected"
+          @click="queueStartEdit(queueHeadPending)"
+        >
+          <q-tooltip>Change the prompt before you resume it</q-tooltip>
+        </q-btn>
       </div>
 
       <!-- list -->
@@ -1028,8 +1231,22 @@
                 class="pi-text text-body2 pi-queue-text"
                 :class="{ 'text-grey-5': it.status === 'done' || it.status === 'skipped' }"
                 @dblclick="queueStartEdit(it)"
-              >{{ it.text }}</div>
+              >{{ promptWords(it.text) }}</div>
 
+              <!-- Files queued WITH this prompt; they go to the model when it runs. -->
+              <div v-if="it.attachments && it.attachments.length" class="q-mt-xs">
+                <q-chip
+                  v-for="(a, ai) in it.attachments"
+                  :key="ai"
+                  dense
+                  size="sm"
+                  color="blue-grey-8"
+                  text-color="white"
+                  :icon="a.kind === 'image' ? 'image' : 'description'"
+                >
+                  {{ a.name }}<span v-if="a.bytes" class="text-grey-4 q-ml-xs">{{ humanSize(a.bytes) }}</span>
+                </q-chip>
+              </div>
               <div v-if="it.compact_first || it.note" class="text-caption text-grey-5 q-mt-xs">
                 <span v-if="it.compact_first" class="q-mr-sm"><q-icon name="compress" size="12px" /> compact first</span>
                 <span v-if="it.note" :class="it.status === 'failed' ? 'text-red-4' : ''">{{ it.note }}</span>
@@ -1050,7 +1267,10 @@
                     class="pi-queue-turn pi-text"
                     :class="t.role === 'assistant' ? 'pi-queue-turn--q' : 'pi-queue-turn--a'"
                   >
-                    <span class="pi-queue-turn-who">{{ t.role === "assistant" ? "Asked" : "You" }}<template v-if="t.via === 'chat'"> (in chat)</template></span>
+                    <!-- Named, not "You": in a shared session the answer above yours may
+                         be a colleague's, and reading it as your own is how two people end
+                         up thinking the question is still open. -->
+                    <span class="pi-queue-turn-who">{{ t.role === "assistant" ? "Asked" : queueThreadWho(t) }}<template v-if="t.via === 'chat'"> (in chat)</template></span>
                     {{ t.text }}
                   </div>
                 </div>
@@ -1064,6 +1284,7 @@
                 <q-btn flat round dense size="sm" icon="close" @click="queueEditId = null"><q-tooltip>Cancel (Esc)</q-tooltip></q-btn>
               </template>
               <template v-else>
+                <q-btn flat round dense size="sm" icon="edit" color="blue-4" :disable="it.status === 'running'" @click="queueStartEdit(it)"><q-tooltip>Edit this prompt before it runs</q-tooltip></q-btn>
                 <q-btn flat round dense size="sm" icon="expand_less" :disable="idx === 0 || it.status === 'running'" @click="queueMove(it, -1)"><q-tooltip>Move up</q-tooltip></q-btn>
                 <q-btn flat round dense size="sm" icon="expand_more" :disable="idx === queueItems.length - 1 || it.status === 'running'" @click="queueMove(it, 1)"><q-tooltip>Move down</q-tooltip></q-btn>
                 <q-btn flat round dense size="sm" icon="more_horiz" :disable="it.status === 'running'">
@@ -1105,8 +1326,35 @@
           <q-card-section class="row items-center q-pb-none">
             <q-icon name="history" size="sm" class="q-mr-sm" />
             <div class="text-h6">Queue history</div>
-            <span class="text-caption text-grey-5 q-ml-sm">{{ queueHistory.length }} entries &middot; this conversation &middot; not shared with the AI</span>
+            <span class="text-caption text-grey-5 q-ml-sm">
+              {{ queueHistoryCount }} entries &middot; every prompt in this conversation,
+              and who sent it &middot; not shared with the AI
+            </span>
+            <q-spinner v-if="queueHistoryLoading" size="16px" class="q-ml-sm" />
+            <q-btn flat dense round icon="refresh" size="sm" class="q-ml-xs" @click="openQueueHistory">
+              <q-tooltip>Reload from the server</q-tooltip>
+            </q-btn>
             <q-space />
+            <!-- WHO. A shared session has several people in it (driver, watchers who took
+                 over, a paired phone), so "show me only Dan's prompts" is the question an
+                 admin actually asks of this list. Hidden when only one person appears:
+                 a filter with one choice is furniture. -->
+            <q-select
+              v-if="queueHistPeople.length > 1"
+              v-model="queueHistFilter"
+              :options="queueHistPeople"
+              dark
+              dense
+              options-dense
+              emit-value
+              map-options
+              borderless
+              class="q-mr-sm pi-queue-hist-who-filter"
+              data-test="pi-queue-history-who"
+            >
+              <template #prepend><q-icon name="person_search" size="18px" /></template>
+              <q-tooltip>Show only what one person sent</q-tooltip>
+            </q-select>
             <q-btn flat dense no-caps icon="delete_sweep" label="Clear history" color="red-4" :disable="!connected || !queueHistory.length" @click="queueClearHistory" />
             <q-btn icon="close" flat round dense v-close-popup />
           </q-card-section>
@@ -1114,17 +1362,59 @@
             <div v-for="(e, i) in queueHistoryView" :key="i" class="pi-queue-hist-row">
               <div class="pi-queue-hist-when text-grey-5">{{ queueHistWhen(e.at) }}</div>
               <q-icon :name="queueHistIcon(e.event)" :color="queueHistColor(e.event)" size="18px" class="q-mr-sm" />
+              <!-- WHO SENT IT. Its own column so the list reads down the names, which is
+                   how an admin scans it. Blank for the AI's own rows (it asked a
+                   question, a turn failed) and for rows written before the bridge kept
+                   names - those say "unknown" rather than being attributed to a guess. -->
+              <div class="pi-queue-hist-who" :class="queueHistWhoMine(e) ? 'text-teal-3' : (queueHistWho(e) ? 'text-blue-3' : 'text-grey-7')">
+                <template v-if="queueHistWho(e)">
+                  {{ queueHistWho(e) }}
+                  <q-tooltip v-if="e.user" :delay="300">
+                    {{ e.by || e.user }} &middot; login <code>{{ e.user }}</code>
+                  </q-tooltip>
+                </template>
+                <template v-else-if="queueHistIsHuman(e.event)">
+                  unknown
+                  <q-tooltip :delay="300" max-width="320px">
+                    Sent before this conversation recorded names, so who sent it is not
+                    known. Everything from now on is named.
+                  </q-tooltip>
+                </template>
+                <template v-else>&mdash;</template>
+              </div>
               <div class="col" style="min-width: 0">
                 <div>
-                  <span class="pi-queue-hist-event" :class="`text-${queueHistColor(e.event)}`">{{ queueHistLabel(e.event) }}</span>
-                  <span v-if="e.text" class="pi-text"> {{ e.text }}</span>
+                  <!-- The gap between the label and the prompt is CSS, not a literal
+                       space: Vue's compiler condenses whitespace at the start of an
+                       element, so " {{ e.text }}" rendered as "You askedwrite up an
+                       email...". -->
+                  <span class="pi-queue-hist-event" :class="`text-${queueHistColor(e.event)}`">{{ queueHistLabel(e) }}</span>
+                  <span v-if="e.text" class="pi-queue-hist-sep text-grey-6">&mdash;</span>
+                  <span v-if="e.text" class="pi-text">{{ promptWords(e.text) }}</span>
+                  <!-- Recovered prompts: an icon, not a sentence repeated under every
+                       row. On a conversation with forty of them the caption said the
+                       same eight words forty times and buried the prompts themselves. -->
+                  <q-icon
+                    v-if="e.detail === RECOVERED_NOTE"
+                    name="restore"
+                    size="14px"
+                    class="q-ml-xs text-grey-6"
+                  >
+                    <q-tooltip>
+                      Recovered from this conversation&rsquo;s transcript &mdash; it was
+                      sent before the history recorded every prompt.
+                    </q-tooltip>
+                  </q-icon>
                 </div>
-                <div v-if="e.detail" class="text-caption text-grey-4 pi-text q-mt-xs">
+                <div v-if="e.detail && e.detail !== RECOVERED_NOTE" class="text-caption text-grey-4 pi-text q-mt-xs">
                   <template v-if="e.event === 'answered' || e.event === 'answered_in_chat'">&#8617; </template>{{ e.detail }}
                 </div>
               </div>
             </div>
-            <div v-if="!queueHistory.length" class="text-grey-6 q-pa-md text-center">Nothing yet.</div>
+            <div v-if="queueHistoryLoading && !queueHistory.length" class="text-grey-6 q-pa-md text-center">
+              Loading&hellip;
+            </div>
+            <div v-else-if="!queueHistory.length" class="text-grey-6 q-pa-md text-center">Nothing yet.</div>
           </q-card-section>
         </q-card>
       </q-dialog>
@@ -1138,6 +1428,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue"
 import { useQuasar } from "quasar";
 import { useRoute, useRouter } from "vue-router";
 import { getBaseUrl } from "@/boot/axios";
+import { isFollowingBottom } from "@/utils/scrollFollow";
 import {
   createPiSession,
   saveAIAutoApprove,
@@ -1234,6 +1525,270 @@ export default {
     const streaming = ref(false);
     const messages = ref([]);
     const input = ref("");
+
+    // PHONE? The installed app (standalone display mode) or any narrow screen. Drives the
+    // back button and the compact toolbar; nothing else changes - the session is the same.
+    const isPhone = ref(false);
+    const checkPhone = () => {
+      isPhone.value =
+        (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+        window.innerWidth < 720;
+    };
+    checkPhone();
+    window.addEventListener("resize", checkPhone);
+    function backToInbox() {
+      // History back keeps a fresh-installed app inside itself; fall back to the inbox route.
+      if (window.history.length > 1) router.back();
+      else router.push("/m");
+    }
+
+    // ---- who is driving --------------------------------------------------------
+    // The session runs on the server; this window is a view. `presence` says who holds the
+    // seat. A viewer's composer is read-only (and the bridge refuses their frames anyway).
+    // Helpdesk stage of the ticket this window is about (decision chats only).
+    const ticketStage = ref("");
+    function stageColor(st) {
+      const s = String(st || "").toLowerCase();
+      if (/closed|done|solved|resolved/.test(s)) return "green-8";
+      if (/cancel/.test(s)) return "grey-7";
+      if (/progress|working|assigned/.test(s)) return "blue-8";
+      if (/wait|hold|pending|customer/.test(s)) return "orange-8";
+      if (/new/.test(s)) return "teal-8";
+      return "blue-grey-7";
+    }
+    const presence = ref(null);          // { owner, owner_connected, viewers, you, pending_from }
+    const isDriver = computed(() => !!presence.value?.you && presence.value.you.role === "owner");
+    const seatTaken = computed(() => !!presence.value?.owner && !isDriver.value);
+    const canTakeOver = computed(() => !!presence.value?.you?.can_take_over);
+    const takeoverAsk = ref(null);       // admin owner: { from, timeout_s } while someone asks
+    const takeoverPending = ref(false);
+    // PIN: keep the session alive with no viewer connected at all. The phone app pins
+    // automatically whenever it is driving - a phone in the background drops its socket in
+    // seconds, and the AI's work must not stop with it. Desktop users can pin by hand.
+    const pinned = ref(false);
+    const pinnedBy = ref("");
+    function setPin(v) {
+      if (!ws || !connected.value) return;
+      ws.send(JSON.stringify({ type: "pin", value: !!v }));
+    }
+    // Auto-pin on the phone: whenever THIS window becomes the driver.
+    watch(isDriver, (drv) => { if (drv && isPhone.value && !pinned.value) setPin(true); });
+    function requestTakeover() {
+      if (!ws || !connected.value) return;
+      takeoverPending.value = true;
+      ws.send(JSON.stringify({ type: "takeover" }));
+    }
+    function answerTakeover(approve) {
+      if (!ws) return;
+      ws.send(JSON.stringify({ type: "takeover_response", approve: !!approve }));
+      takeoverAsk.value = null;
+    }
+
+    // ---- attachments ------------------------------------------------------
+    // Screenshots and log files, attached from the composer (paperclip, drag-and-drop,
+    // or Ctrl+V of a clipboard image). They are held here, base64-encoded, until the
+    // message is actually sent - so the tech can add, review and remove them first,
+    // and so an attachment never travels without the sentence explaining it.
+    //
+    // Limits mirror the bridge's (ATTACH_LIMITS) and are refreshed from the `ready`
+    // frame; enforcing them here too means an oversized file is refused instantly
+    // instead of after a 20 MB upload that the bridge then rejects.
+    const attachEnabled = ref(true);
+    const imagesSupported = ref(false);
+    const attachMax = ref({ files: 5, fileBytes: 8 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 });
+    const pendingFiles = ref([]); // [{ id, name, mime, size, data(base64), preview }]
+    const dragOver = ref(false);
+    const fileInput = ref(null);
+    let dragDepth = 0; // dragenter/dragleave fire per child element; count them
+
+    // Images are re-encoded to at most this on the long edge before they are sent.
+    // A 4K screenshot is ~8 MB and ~2500 image tokens; at 1600px it is legible for
+    // reading error dialogs and costs a fraction of that, on EVERY later turn.
+    const IMG_MAX_EDGE = 1600;
+
+    function humanSize(n) {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+      return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function fileIcon(f) {
+      return (f.mime || "").startsWith("image/") ? "image" : "description";
+    }
+
+    const pendingBytes = computed(() =>
+      pendingFiles.value.reduce((sum, f) => sum + (f.size || 0), 0),
+    );
+
+    function attachNote(text) {
+      messages.value.push({ role: "system", text });
+      scrollToBottom();
+    }
+
+    function readAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onerror = () => reject(new Error("could not be read"));
+        fr.onload = () => resolve(String(fr.result || ""));
+        fr.readAsDataURL(file);
+      });
+    }
+
+    // Downscale big images in the browser. Falls back to the original bytes on any
+    // failure - a shrink that goes wrong must not lose the attachment.
+    async function shrinkImage(file, dataUrl) {
+      try {
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => reject(new Error("decode failed"));
+          img.src = dataUrl;
+        });
+        const edge = Math.max(img.width, img.height);
+        if (edge <= IMG_MAX_EDGE && file.size <= 1.5 * 1024 * 1024) return dataUrl;
+        const scale = Math.min(1, IMG_MAX_EDGE / edge);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // PNG keeps text crisp (screenshots of dialogs/logs are the common case);
+        // photos of a screen are rare here and JPEG artefacts eat small text.
+        const out = canvas.toDataURL("image/png");
+        return out.length < dataUrl.length ? out : dataUrl;
+      } catch {
+        return dataUrl;
+      }
+    }
+
+    async function addFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      for (const file of files) {
+        if (pendingFiles.value.length >= attachMax.value.files) {
+          attachNote(
+            `\u{1F4CE} ${file.name} not attached \u2014 ${attachMax.value.files} files is the limit for one message.`,
+          );
+          continue;
+        }
+        if (file.size > attachMax.value.fileBytes) {
+          attachNote(
+            `\u{1F4CE} ${file.name} not attached \u2014 ${humanSize(file.size)} is over the ${humanSize(attachMax.value.fileBytes)} limit.`,
+          );
+          continue;
+        }
+        const isImage = (file.type || "").startsWith("image/");
+        if (isImage && !imagesSupported.value) {
+          attachNote(
+            `\u{1F4CE} ${file.name} not attached \u2014 the selected model cannot read images. Switch to a vision model, or paste the text.`,
+          );
+          continue;
+        }
+        let dataUrl;
+        try {
+          dataUrl = await readAsDataUrl(file);
+        } catch {
+          attachNote(`\u{1F4CE} ${file.name} could not be read from disk.`);
+          continue;
+        }
+        if (isImage) dataUrl = await shrinkImage(file, dataUrl);
+        const comma = dataUrl.indexOf(",");
+        const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+        const bytes = Math.round((b64.length * 3) / 4);
+        if (pendingBytes.value + bytes > attachMax.value.totalBytes) {
+          attachNote(
+            `\u{1F4CE} ${file.name} not attached \u2014 it would take this message over ${humanSize(attachMax.value.totalBytes)}.`,
+          );
+          continue;
+        }
+        pendingFiles.value.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name || (isImage ? "screenshot.png" : "file.txt"),
+          mime: file.type || "application/octet-stream",
+          size: bytes,
+          data: b64,
+          preview: isImage ? dataUrl : "",
+        });
+      }
+    }
+
+    // The bridge inlines attached text files into the prompt between sentinels. On
+    // reload the transcript comes back with those bodies in it; re-rendering a 200 KB
+    // log inside a chat bubble is unreadable, so pull them back out into chips. The
+    // model's copy is untouched - this is display only.
+    const ATTACH_BLOCK_RE = /\[\[pi-attachment:([^\]|]*)\|(\d+)\]\]\n?[\s\S]*?\[\[\/pi-attachment\]\]/g;
+    function splitAttachments(raw) {
+      const text = String(raw || "");
+      if (!text.includes("[[pi-attachment:")) return { text: text.trim(), files: [] };
+      const files = [];
+      let stripped = text.replace(ATTACH_BLOCK_RE, (_m, name, bytes) => {
+        files.push({ name, size: Number(bytes) || 0, mime: "text/plain", preview: "" });
+        return "";
+      });
+      // Drop the bridge's "The technician attached N file(s)..." preamble too - the
+      // chips say it better and shorter.
+      stripped = stripped
+        .replace(/The technician attached \d+ file\(s\)\. Their full contents follow[^\n]*\n?/g, "")
+        .trim();
+      return { text: stripped, files };
+    }
+
+    function removeFile(id) {
+      pendingFiles.value = pendingFiles.value.filter((f) => f.id !== id);
+    }
+    function clearFiles() {
+      pendingFiles.value = [];
+    }
+    function pickFiles() {
+      if (fileInput.value) fileInput.value.click();
+    }
+
+    const previewOpen = ref(false);
+    const previewFile = ref({ name: "", preview: "" });
+    function openPreview(f) {
+      if (!f?.preview) return;
+      previewFile.value = f;
+      previewOpen.value = true;
+    }
+    async function onFilePicked(ev) {
+      await addFiles(ev.target.files);
+      ev.target.value = ""; // so the same file can be picked twice in a row
+    }
+    function onDragEnter(ev) {
+      if (!attachEnabled.value) return;
+      if (!Array.from(ev.dataTransfer?.types || []).includes("Files")) return;
+      dragDepth++;
+      dragOver.value = true;
+    }
+    function onDragLeave() {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dragOver.value = false;
+    }
+    async function onDrop(ev) {
+      dragDepth = 0;
+      dragOver.value = false;
+      if (!attachEnabled.value) return;
+      await addFiles(ev.dataTransfer?.files);
+    }
+    // Ctrl+V of a screenshot: the clipboard carries an image blob with no filename.
+    async function onPaste(ev) {
+      if (!attachEnabled.value) return;
+      const items = Array.from(ev.clipboardData?.items || []);
+      const imgs = items.filter((i) => i.kind === "file" && i.type.startsWith("image/"));
+      if (!imgs.length) return; // plain text paste - leave the textarea alone
+      ev.preventDefault();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const files = imgs
+        .map((i, n) => {
+          const blob = i.getAsFile();
+          if (!blob) return null;
+          const ext = (i.type.split("/")[1] || "png").replace("jpeg", "jpg");
+          return new File([blob], `pasted-${stamp}${n ? `-${n + 1}` : ""}.${ext}`, { type: i.type });
+        })
+        .filter(Boolean);
+      await addFiles(files);
+    }
+
     const modelOptions = ref([]);
     const selectedModel = ref(null);
     const selectedGroup = ref(null);
@@ -1416,7 +1971,9 @@ export default {
     const queueOverlay = computed(() => $q.screen.lt.md);
     const queueItems = ref([]);
     const queueAuto = ref(false);
-    const queueAutoClear = ref(false);
+    // ON is the default (the server decides, per window - see queue.js), so the toggle
+    // must not sit at off for the moment before the first queue_state frame arrives.
+    const queueAutoClear = ref(true);
     const queuePaused = ref(null);
     const queueRunningId = ref(null);
     const queuePending = ref(0);
@@ -1426,8 +1983,34 @@ export default {
     const queueEditText = ref("");
     const queueQuestions = ref([]);
     const queueHistory = ref([]);
+    const queueHistoryCount = ref(0);
+    const queueHistoryLoading = ref(false);
     const queueHistoryOpen = ref(false);
-    const queueHistoryView = computed(() => [...queueHistory.value].reverse());
+    // "Show me only Dan's prompts" - see queueHistPeople / queueHistoryView below.
+    const queueHistFilter = ref("");
+    // Always ask the bridge for the list at the moment it is opened. A copy that rode in
+    // on an earlier frame is exactly how this panel came to show a conversation's first
+    // few events and nothing since.
+    function openQueueHistory() {
+      queueHistoryOpen.value = true;
+      queueHistFilter.value = "";   // a stale filter hiding the newest rows is a bug report
+      queueHistoryLoading.value = true;
+      queueSend({ type: "queue_history" });
+    }
+    // Newest first, and only the chosen person when the "who" filter is set. The filter
+    // compares logins, not display names: two technicians with the same first name must
+    // not merge into one line of the audit.
+    const queueHistoryView = computed(() => {
+      const want = queueHistFilter.value;
+      const rows = want
+        ? queueHistory.value.filter((e) => {
+            if (!queueHistIsHuman(e.event)) return false;
+            const key = String(e.user || e.by || "").toLowerCase();
+            return want === "\u0000unknown" ? !key : key === want;
+          })
+        : queueHistory.value;
+      return [...rows].reverse();
+    });
     const queueAnswerText = ref({});   // question id -> draft answer
     const queueThreadOpen = ref({});   // item id -> Q&A unfolded
     // Auto-open: the panel opens by itself when a chat comes up with anything queued, and
@@ -1543,7 +2126,7 @@ export default {
       streamStartAt.value = Date.now();
       markActivity();
       ws.send(JSON.stringify({ type: "prompt", message: seed }));
-      scrollToBottom();
+      scrollToBottom(true);
     }
     // Queue of approval requests. A single turn (especially multi-machine) can
     // fire several gated tool calls in parallel; the bridge sends one
@@ -1589,10 +2172,115 @@ export default {
       return base.replace(/^http/, "ws");
     }
 
-    async function scrollToBottom() {
+    // ------------------------------------------------------------------ SCROLL PAUSE
+    //
+    // Asked for (owner, 2026-09-22): "when i scroll up in any of the AI windows... i need
+    // it to PAUSE where I am when new info shows up at the bottom of the screen.. i am
+    // usually reviewing or trying to copy / paste ... it should only keep updating with the
+    // most recent data when i am at the bottom of the screen within 1% of the entire
+    // scrolled area".
+    //
+    // Before this, EVERY frame called scrollToBottom() unconditionally - a streaming answer
+    // does that many times a second - so reading anything above the fold was impossible and
+    // a drag-selection was yanked out from under the mouse mid-copy.
+    //
+    // The rule is exactly as specified: follow the conversation only while the view is
+    // within 1% of the scrollable height of the bottom. `scrollHeight` is the ENTIRE
+    // scrolled area, so on a long transcript 1% is a comfortable band and on a short one it
+    // is a few pixels - hence the small floor, or a transcript one line taller than its
+    // window would unpin itself on a single wheel click.
+    // The rule itself lives in one place for every streaming window - see
+    // utils/scrollFollow.js for why 1% of the WHOLE scrolled area, and why there is a floor.
+    const pinnedToBottom = ref(true);
+    // How much arrived while held, so the button can say what you are missing rather than
+    // just "jump". Counted in messages, which is what a person sees.
+    const heldCount = ref(0);
+    const heldLabel = computed(() =>
+      heldCount.value > 0
+        ? `Paused \u2014 ${heldCount.value} new below`
+        : "Paused \u2014 jump to latest",
+    );
+
+    /** Every scroll of the transcript re-decides whether we are following it. */
+    function onTranscriptScroll() {
+      const el = scrollArea.value;
+      if (!el) return;
+      const at = isFollowingBottom(el);
+      if (at === pinnedToBottom.value) return;
+      pinnedToBottom.value = at;
+      // Coming back to the bottom means "follow again", and there is nothing held.
+      if (at) heldCount.value = 0;
+    }
+
+    // Message count when the view was last at the bottom: the baseline for "N new below".
+    let heldFromCount = 0;
+
+    /**
+     * Keep the newest content in view - but ONLY while the reader is at the bottom.
+     *
+     * Called from every frame handler, so this one guard is what makes the whole window
+     * behave. `force` is for the deliberate cases: the operator pressing the button, their
+     * own message being sent, opening the window.
+     */
+    async function scrollToBottom(force = false) {
       await nextTick();
       const el = scrollArea.value;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (!el) return;
+      if (!force && !pinnedToBottom.value) {
+        heldCount.value = messages.value.length - heldFromCount;
+        if (heldCount.value < 0) heldCount.value = 0;
+        return;
+      }
+      el.scrollTop = el.scrollHeight;
+      pinnedToBottom.value = true;
+      heldCount.value = 0;
+      heldFromCount = messages.value.length;
+    }
+
+    /** The button, and anything that means "take me back to live". */
+    function jumpToLatest() {
+      pinnedToBottom.value = true;
+      heldCount.value = 0;
+      scrollToBottom(true);
+    }
+
+    // --- Mobile viewport -----------------------------------------------------
+    // `100vh` on a phone is the height of the viewport with the browser chrome
+    // RETRACTED - taller than what you can actually see. This column is sized
+    // from the top, so the overflow lands at the BOTTOM: the composer, and the
+    // last message above it, end up under the address bar and cannot be read.
+    // `100dvh` (in the stylesheet) tracks that chrome, but NEITHER unit reacts
+    // to the software keyboard - only the *visual* viewport shrinks when it
+    // opens. So where the API exists we measure it and drive the height here.
+    const root = ref(null);
+    let vvRaf = 0;
+
+    function applyViewportHeight() {
+      const el = root.value;
+      const vv = window.visualViewport;
+      if (!el || !vv) return;
+      // Pinch-zoom shrinks the visual viewport too. Resizing the chat to fit a
+      // zoomed-in rectangle would be wrong, so hand back to the CSS (dvh).
+      if (vv.scale > 1.01) {
+        el.classList.remove("pichat--measured");
+        return;
+      }
+      // Was the transcript pinned to the bottom before we resized it? If so it
+      // has to stay pinned - keeping the newest message visible is the point.
+      // Was the transcript following the conversation before we resized it? If it was, it
+      // has to stay pinned; if the reader had scrolled up, the keyboard opening must not
+      // throw them back to the bottom (the same rule as everywhere else - isAtBottom()).
+      const wasAtBottom = pinnedToBottom.value && isFollowingBottom(scrollArea.value);
+
+      el.style.setProperty("--pichat-h", `${Math.round(vv.height)}px`);
+      el.classList.add("pichat--measured");
+      if (wasAtBottom) scrollToBottom(true);
+    }
+
+    function onViewportChange() {
+      // These fire in bursts while the keyboard animates in; coalesce them.
+      if (vvRaf) cancelAnimationFrame(vvRaf);
+      vvRaf = requestAnimationFrame(applyViewportHeight);
     }
 
     // Always return the reactive proxy element (mutating it triggers re-render).
@@ -1894,18 +2582,38 @@ export default {
               }
               mutateAllowed.value = !!m.mutate_allowed;
               costVisible.value = !!m.cost_visible;
+              if (m.presence) presence.value = m.presence;
+              if (m.ticket_stage !== undefined) ticketStage.value = m.ticket_stage || "";
+              // The SERVER decides whether a turn is running. This used to only ever set
+              // the flag TRUE, so a turn interrupted by a restart (no agent_end ever
+              // arrived) left the window stuck "thinking" forever - composer disabled,
+              // Run next disabled, nothing to do but reload. On every ready frame the
+              // server's answer wins, in both directions.
+              streaming.value = !!m.streaming;
+              if (m.streaming) streamStartAt.value = Date.now();
+              pinned.value = !!m.pinned; pinnedBy.value = m.pinned_by || "";
+              if (isPhone.value && m.presence?.you?.role === "owner" && !m.pinned) setPin(true);
+              // Attachment caps and vision support come from the bridge, so the composer
+              // can never offer something the server will refuse.
+              if (m.attachments) {
+                attachEnabled.value = m.attachments.enabled !== false;
+                imagesSupported.value = !!m.attachments.images_supported;
+                attachMax.value = {
+                  files: Number(m.attachments.max_files || 5),
+                  fileBytes: Number(m.attachments.max_file_bytes || 8 * 1024 * 1024),
+                  totalBytes: Number(m.attachments.max_total_bytes || 20 * 1024 * 1024),
+                };
+              }
               // Autocomplete is whatever the bridge says this role may use. Nothing is
               // inferred here, so the list cannot drift from what the server enforces.
               commands.value = Array.isArray(m.commands) ? m.commands : [];
               if (m.remote_allowed !== undefined) remoteAllowed.value = !!m.remote_allowed;
               contextWindow.value = Number(m.context_window || 0);
-              if (m.operator_enabled && Array.isArray(m.operator_machines) && m.operator_machines.length) {
-                const names = m.operator_machines.map((x) => x.hostname || x.agent_id).filter(Boolean).join(", ");
-                notes.push({
-                  role: "system",
-                  text: `Desktop Operator available on: ${names}. Just tell me what to open/click/fill on that workstation (no passwords, no save/delete).`,
-                });
-              }
+              // Desktop Operator availability is deliberately NOT announced here.
+              // It was pushed as a system note on every session open, so it repeated in
+              // every chat window for people who already know the capability exists.
+              // The capability is unchanged — only the banner is gone. Other open-time
+              // notes (model resume, restored/denied switches) still appear.
               maybeSeedResolve();
               // hydrate history — reconstruct the full transcript INCLUDING the
               // command window (tool calls + their output), not just the text
@@ -1917,10 +2625,28 @@ export default {
               const toolById = {};
               (m.history || []).forEach((hm) => {
                 if (hm.role === "user") {
+                  const blocks = typeof hm.content === "string" ? [] : (hm.content || []);
                   const txt = typeof hm.content === "string"
                     ? hm.content
-                    : (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-                  if (txt) messages.value.push({ role: "user", text: txt });
+                    : blocks.filter((c) => c.type === "text").map((c) => c.text).join("");
+                  const split = splitAttachments(txt);
+                  // Images were sent as ImageContent blocks; show them again, from the
+                  // transcript's own copy, so a reloaded window looks like the live one.
+                  // An older image comes back with `data` emptied by the bridge (bytes
+                  // are not re-sent forever). It still belongs in the transcript, as a
+                  // chip - dropping it would rewrite what the technician actually sent.
+                  const imgs = blocks
+                    .filter((c) => c.type === "image")
+                    .map((c, n) => ({
+                      name: c.data ? `image-${n + 1}` : `image-${n + 1} (not kept for display)`,
+                      size: Math.round((String(c.data || "").length * 3) / 4),
+                      mime: c.mimeType || "image/png",
+                      preview: c.data ? `data:${c.mimeType || "image/png"};base64,${c.data}` : "",
+                    }));
+                  const files = [...imgs, ...split.files];
+                  if (split.text || files.length) {
+                    messages.value.push({ role: "user", text: split.text, files });
+                  }
                 } else if (hm.role === "assistant") {
                   const content = Array.isArray(hm.content) ? hm.content : [];
                   const txt = content.filter((c) => c.type === "text").map((c) => c.text).join("");
@@ -2079,8 +2805,61 @@ export default {
               streaming.value = false;
               messages.value.push({ role: "system", text: m.text });
               scrollToBottom();
+            } else if (m.type === "queue_history") {
+              queueHistory.value = Array.isArray(m.history) ? m.history : [];
+              queueHistoryCount.value = Number(m.count || queueHistory.value.length);
+              queueHistoryLoading.value = false;
+            } else if (m.type === "user_message") {
+              // The driver's question, as seen by a viewer (the driver's own window already
+              // has it). Shown with who asked, so two people never think they both asked.
+              // Same as queue_started: never render an inlined file body in the bubble.
+              const vsplit = splitAttachments(m.text);
+              messages.value.push({
+                role: "user",
+                text: vsplit.text + (m.attachments ? ` \u{1F4CE} (${m.attachments} attachment${m.attachments > 1 ? "s" : ""})` : ""),
+                files: vsplit.files,
+                via: m.by,
+              });
+              if (!m.steer) { streaming.value = true; streamStartAt.value = Date.now(); }
+              scrollToBottom();
+            } else if (m.type === "ticket_stage") {
+              ticketStage.value = m.stage || "";
+            } else if (m.type === "pin_state") {
+              pinned.value = !!m.pinned; pinnedBy.value = m.by || "";
+            } else if (m.type === "presence") {
+              presence.value = m;
+            } else if (m.type === "readonly_refused") {
+              messages.value.push({ role: "system", text: `\u{1F512} ${m.message}` });
+              scrollToBottom();
+            } else if (m.type === "takeover_request") {
+              takeoverAsk.value = { from: m.from, timeout_s: m.timeout_s };
+            } else if (m.type === "takeover_result") {
+              takeoverPending.value = false;
+              if (m.result !== "granted") {
+                messages.value.push({ role: "system", text: `\u{1F3AE} Take over ${m.result}${m.reason ? ": " + m.reason : ""}` });
+                scrollToBottom();
+              }
+            } else if (m.type === "attachments_rejected") {
+              // Never silent: an attachment the model did not receive must be visible in
+              // the transcript, next to the message it was supposed to belong to.
+              messages.value.push({
+                role: "system",
+                text: `\u{1F4CE} ${m.message || "Some attachments were not sent to the AI."}`,
+              });
+              scrollToBottom();
+            } else if (m.type === "attachments_accepted") {
+              // Nothing to draw (the bubble already shows the chips) - kept as an
+              // explicit no-op so an unknown-frame warning is never logged for it.
             } else if (m.type === "model_changed") {
               selectedModel.value = m.model_id;
+              if (m.images_supported !== undefined) imagesSupported.value = !!m.images_supported;
+              if (!imagesSupported.value && pendingFiles.value.some((f) => (f.mime || "").startsWith("image/"))) {
+                pendingFiles.value = pendingFiles.value.filter((f) => !(f.mime || "").startsWith("image/"));
+                messages.value.push({
+                  role: "system",
+                  text: `\u{1F4CE} Attached images were removed \u2014 ${m.display} cannot read images.`,
+                });
+              }
               if (selectedGroup.value == null) {
                 selectedTarget.value = targetValue(null, m.model_id);
                 saveTarget(null, m.model_id);
@@ -2111,7 +2890,14 @@ export default {
               queuePaused.value = m.paused || null;
               const prevQ = queueQuestions.value.map((q) => q.id);
               queueQuestions.value = Array.isArray(m.questions) ? m.questions : [];
-              queueHistory.value = Array.isArray(m.history) ? m.history : [];
+              // The list itself is no longer pushed with every state frame (it now holds
+              // every prompt of the conversation, which would be hundreds of KB on the
+              // socket per queue change). We keep the count and fetch the list when the
+              // operator opens it - so what they read is always current.
+              queueHistoryCount.value = Number(
+                m.history_count != null ? m.history_count : (m.history || []).length,
+              );
+              if (Array.isArray(m.history)) queueHistory.value = m.history;
               const newQuestion = queueQuestions.value.some((q) => !prevQ.includes(q.id));
               if (newQuestion) { queueOpen.value = true; queueUserClosed = false; }
               if (queueFirstState) {
@@ -2137,7 +2923,16 @@ export default {
             } else if (m.type === "queue_started") {
               // A queued prompt is going to the model now: show it as the user's own
               // bubble (it is their words), tagged so the transcript is honest.
-              messages.value.push({ role: "user", text: m.text, queued: true, queuedReply: !!m.reply });
+              //
+              // The text arrives with any attached FILE BODIES inlined between
+              // [[pi-attachment:...]] markers - that is what the model reads. Rendering it
+              // raw dumped a whole file into the bubble (a saved HTML error page came out
+              // as a wall of base64 on TICKET/61431). Pull the bodies back out into chips,
+              // exactly as the transcript re-hydration does: same words, file shown as a
+              // chip, and the model's copy untouched.
+              const qsplit = splitAttachments(m.text);
+              messages.value.push({ role: "user", text: qsplit.text, files: qsplit.files,
+                queued: true, queuedReply: !!m.reply });
               currentIdx = -1;
               streaming.value = true;
               streamStartAt.value = Date.now();
@@ -2189,6 +2984,15 @@ export default {
         });
     }
 
+    // A phone returning from the background usually has a dead socket and no close event
+    // yet. Reconnect the moment the page is visible again, onto the same live session.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || unmounted) return;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) reconnect();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    onBeforeUnmount(() => document.removeEventListener("visibilitychange", onVisible));
+
     function reconnect() {
       connectionLost.value = false;
       reconnectAttempts = 0;
@@ -2237,11 +3041,31 @@ export default {
 
     function send() {
       const text = input.value.trim();
-      if (!text || !connected.value) return;
+      // A window command ("/write on") is answered by the bridge and never reaches the
+      // model, so attachments cannot ride with it. Keep them staged - silently dropping
+      // the file the tech just picked is worse than making them press Send twice.
+      if (pendingFiles.value.length && looksLikeCommand(text)) {
+        attachNote(
+          `\u{1F4CE} ${pendingFiles.value.length} file(s) stay attached \u2014 a / command is handled by this window, ` +
+            "so nothing is sent to the AI with it. Run the command, then send your message.",
+        );
+      }
+      const files = pendingFiles.value.length && looksLikeCommand(text) ? [] : pendingFiles.value;
+      // An attachment on its own is a legitimate message ("look at this"), so the send
+      // gate is text OR files - but the model is told which is which.
+      if ((!text && !files.length) || !connected.value) return;
       // Prime Web Audio while this click/keypress still counts as a user gesture.
       // Managed Chromium browsers otherwise may block the later completion ding.
       primeCompletionAudio();
-      messages.value.push({ role: "user", text });
+      // The bridge needs a sentence to answer; "here, look at this" is what the tech
+      // meant by attaching a file with no words, and the bubble must say the same thing
+      // the model was sent - a reload reads it back from the transcript.
+      const outgoing = text || "(see attached file)";
+      messages.value.push({
+        role: "user",
+        text: outgoing,
+        files: files.map((f) => ({ name: f.name, size: f.size, mime: f.mime, preview: f.preview })),
+      });
       currentIdx = -1;
       // A window command ("/write on") is answered by the bridge in a millisecond and
       // never reaches the model, so raising the streaming spinner for it would leave a
@@ -2251,9 +3075,20 @@ export default {
         streamStartAt.value = Date.now();
       }
       markActivity();
-      ws.send(JSON.stringify({ type: "prompt", message: text }));
+      ws.send(
+        JSON.stringify({
+          type: "prompt",
+          message: outgoing,
+          attachments: files.length
+            ? files.map((f) => ({ name: f.name, mime: f.mime, data: f.data }))
+            : undefined,
+        }),
+      );
+      if (files.length) clearFiles();
       input.value = "";
-      scrollToBottom();
+      // Sending is a deliberate act: it always takes you back to the live bottom, even if
+      // you were reading further up.
+      scrollToBottom(true);
     }
 
     // Queue actions - each is a request to the bridge; the reply is a queue_state frame.
@@ -2261,16 +3096,41 @@ export default {
       if (!ws || !connected.value) return;
       ws.send(JSON.stringify(frame));
     }
+    // FILES FOR THE NEXT QUEUED PROMPT. Kept separate from the composer's own pending
+    // list so attaching a screenshot to a queued item cannot hijack what you are typing
+    // now (and vice versa). Everything else - caps, image downscaling, refusal notes - is
+    // the shared addFiles pipeline, so the two behave identically.
+    const queueFiles = ref([]);
+    const queueFileInput = ref(null);
+    function pickQueueFiles() { if (queueFileInput.value) queueFileInput.value.click(); }
+    function removeQueueFile(id) { queueFiles.value = queueFiles.value.filter((f) => f.id !== id); }
+    async function onQueueFilePicked(ev) {
+      const before = pendingFiles.value;
+      pendingFiles.value = [...queueFiles.value];       // reuse the shared rules...
+      await addFiles(ev.target.files);
+      queueFiles.value = pendingFiles.value;            // ...then take the result back
+      pendingFiles.value = before;
+      ev.target.value = "";
+    }
     function queueAdd() {
       const text = queueNew.value.trim();
-      if (!text) return;
-      queueSend({ type: "queue_add", text, compact_first: queueNewCompact.value });
+      const files = queueFiles.value;
+      if (!text && !files.length) return;
+      queueSend({
+        type: "queue_add",
+        text,
+        compact_first: queueNewCompact.value,
+        attachments: files.map((f) => ({ name: f.name, mime: f.mime, data: f.data })),
+      });
       queueNew.value = "";
       queueNewCompact.value = false;
+      queueFiles.value = [];
     }
     function queueSetAuto(v) { queueSend({ type: "queue_set_auto", value: !!v }); }
     function queueSetAutoClear(v) { queueSend({ type: "queue_set_auto_clear", value: !!v }); }
     function queuePause() { queueSend({ type: "queue_pause" }); }
+    // The item Resume would run next - the one an operator wants to edit first.
+    const queueHeadPending = computed(() => queueItems.value.find((i) => i.status === "pending") || null);
     function queueResume() { queueSend({ type: "queue_resume" }); }
     function queueRunNext() { queueSend({ type: "queue_run_next" }); }
     function queueClearDone() { queueSend({ type: "queue_clear_done" }); }
@@ -2306,31 +3166,93 @@ export default {
         ok: { label: "Clear", color: "negative", flat: true },
       }).onOk(() => queueSend({ type: "queue_clear_history" }));
     }
+    // Written by queue.js backfillPrompts(). Matched exactly so only THAT note collapses
+    // to an icon; every other detail (an answer, a failure reason) still reads in full.
+    const RECOVERED_NOTE = "recovered from the transcript";
+    // The labels say WHAT happened; the row's own "who" column says who did it, so they
+    // are deliberately person-neutral ("Asked", not "You asked" - in a shared session most
+    // rows are not yours). The fourth field marks rows a PERSON is responsible for: those
+    // are the ones whose attribution must be shown, or shown as unknown.
     const QUEUE_HIST = {
-      added:            ["Added",              "add",             "grey-4"],
-      edited:           ["Edited",             "edit",            "grey-4"],
-      requeued:         ["Queued again",       "replay",          "grey-4"],
-      skipped:          ["Skipped",            "remove_done",     "grey-5"],
-      removed:          ["Removed",            "delete",          "grey-5"],
-      started:          ["Sent to the AI",     "play_arrow",      "blue-3"],
+      // Prompts. These are the bulk of the history now: what the model was actually asked.
+      prompt:           ["Asked",              "chat",            "indigo-3", true],
+      prompt_phone:     ["Asked from phone",   "smartphone",      "indigo-3", true],
+      steer:            ["Steered",            "alt_route",       "amber-4",  true],
+      added:            ["Added",              "add",             "grey-4",   true],
+      edited:           ["Edited",             "edit",            "grey-4",   true],
+      requeued:         ["Queued again",       "replay",          "grey-4",   true],
+      skipped:          ["Skipped",            "remove_done",     "grey-5",   true],
+      removed:          ["Removed",            "delete",          "grey-5",   true],
+      started:          ["Sent to the AI",     "play_arrow",      "blue-3",   true],
       done:             ["Done",               "check_circle",    "green-4"],
       failed:           ["Failed",             "error",           "red-4"],
-      stopped:          ["Stopped",            "stop_circle",     "red-4"],
+      stopped:          ["Stopped",            "stop_circle",     "red-4",    true],
+      // The bridge's own rows: the session stopped under a running item, a turn was
+      // carried over. Attributed to the item's owner when it has one, never to a person
+      // as an action they took.
+      interrupted:      ["Interrupted",        "warning",         "orange-4"],
       auto_cleared:     ["Auto-cleared",       "done_all",        "grey-5"],
       asked:            ["AI asked",           "help",            "orange-4"],
-      answered:         ["You answered",       "reply",           "orange-3"],
-      answered_in_chat: ["You answered in chat", "reply",         "orange-3"],
-      answer_sent:      ["Answer sent to the AI", "send",         "blue-3"],
-      dismissed:        ["Question dismissed", "close",           "grey-5"],
+      answered:         ["Answered",           "reply",           "orange-3", true],
+      answered_in_chat: ["Answered in chat",   "reply",           "orange-3", true],
+      answer_sent:      ["Answer sent to the AI", "send",         "blue-3",   true],
+      dismissed:        ["Question dismissed", "close",           "grey-5",   true],
       paused:           ["Paused",             "pause_circle",    "orange-4"],
       resumed:          ["Resumed",            "play_circle",     "green-4"],
-      auto_next:        ["Auto-Next",          "bolt",            "grey-4"],
-      cleared_finished: ["Cleared finished",   "done_all",        "grey-5"],
-      cleared_all:      ["Cleared everything", "delete_sweep",    "red-4"],
+      auto_next:        ["Auto-Next",          "bolt",            "grey-4",   true],
+      auto_clear:       ["Auto-clear",         "done_all",        "grey-4",   true],
+      cleared_finished: ["Cleared finished",   "done_all",        "grey-5",   true],
+      cleared_all:      ["Cleared everything", "delete_sweep",    "red-4",    true],
+      cleared_history:  ["Cleared the history", "delete_sweep",   "red-4",    true],
     };
-    function queueHistLabel(ev) { return (QUEUE_HIST[ev] || [ev])[0]; }
+    // Accepts the entry (or a bare event name, for older call sites).
+    function queueHistLabel(e) {
+      const ev = typeof e === "string" ? e : e?.event;
+      return (QUEUE_HIST[ev] || [ev])[0];
+    }
     function queueHistIcon(ev) { return (QUEUE_HIST[ev] || [, "circle"])[1] || "circle"; }
     function queueHistColor(ev) { return (QUEUE_HIST[ev] || [, , "grey-4"])[2] || "grey-4"; }
+    /** Is a PERSON answerable for this row (as opposed to the AI or the bridge)? */
+    function queueHistIsHuman(ev) { return !!(QUEUE_HIST[ev] || [])[3]; }
+    /** My own login, from presence - so my rows read "You" instead of my own name. */
+    const myUsername = computed(() =>
+      String(presence.value?.you?.username || "").toLowerCase(),
+    );
+    function queueHistWhoMine(e) {
+      const u = String(e?.user || "").toLowerCase();
+      return !!u && !!myUsername.value && u === myUsername.value;
+    }
+    /** The name to show for a row: "You" for mine, their display name for everyone
+     *  else, "" when the row is not a person's (or predates named history). */
+    function queueHistWho(e) {
+      if (queueHistWhoMine(e)) return "You";
+      return String(e?.by || e?.user || "");
+    }
+    /** Same, for an answer in a queued item's thread (which carries only a name). */
+    function queueThreadWho(t) {
+      const name = String(t?.by || "");
+      if (!name) return "You";   // older threads, and your own single-person conversations
+      return name;
+    }
+    // WHO FILTER. Built from the history itself (keyed on the login, which is stable even
+    // when two people share a display name), newest-activity order aside - alphabetical
+    // reads better in a list you are scanning for a name. "Everyone" is always first.
+    const queueHistPeople = computed(() => {
+      const seen = new Map();   // key -> { label, count }
+      for (const e of queueHistory.value) {
+        if (!queueHistIsHuman(e.event)) continue;
+        const key = String(e.user || e.by || "").toLowerCase();
+        const label = queueHistWhoMine(e) ? "You" : (e.by || e.user || "unknown");
+        const k = key || "\u0000unknown";
+        const cur = seen.get(k) || { label, count: 0 };
+        cur.count += 1;
+        seen.set(k, cur);
+      }
+      const people = [...seen.entries()]
+        .sort((a, b) => a[1].label.localeCompare(b[1].label))
+        .map(([value, v]) => ({ value, label: `${v.label} (${v.count})` }));
+      return [{ value: "", label: `Everyone (${queueHistory.value.length})` }, ...people];
+    });
     function queueHistWhen(at) {
       if (!at) return "";
       const d = new Date(at);
@@ -2341,15 +3263,39 @@ export default {
     }
     function queueSetStatus(it, status) { queueSend({ type: "queue_update", id: it.id, status }); }
     function queueToggleCompact(it) { queueSend({ type: "queue_update", id: it.id, compact_first: !it.compact_first }); }
+    /** A prompt as a human should read it: the typed words, with any inlined file bodies
+     *  taken back out. Display only - the model's copy keeps the files. */
+    function promptWords(raw) {
+      const t = String(raw || "");
+      if (!t.includes("[[pi-attachment:")) return t;
+      const split = splitAttachments(t);
+      const names = split.files.map((f) => f.name).filter(Boolean);
+      return split.text + (names.length ? `  \u{1F4CE} ${names.join(", ")}` : "");
+    }
+    // EDITING A QUEUED PROMPT THAT CARRIES FILES.
+    //
+    // item.text holds the typed words AND any inlined file bodies (that is what the model
+    // reads). Editing that raw string means staring at 170 KB of someone's HTML; stripping
+    // it for the editor and saving the result would DELETE the attachment. So the words are
+    // edited and the inlined tail is held aside and put back on save - what you see is what
+    // you wrote, and the evidence survives the edit.
+    const queueEditTail = ref("");
+    const ATTACH_TAIL_RE = /\n*The technician attached \d+ file\(s\)\.[\s\S]*$/;
     function queueStartEdit(it) {
       if (it.status === "running") return;
       queueEditId.value = it.id;
-      queueEditText.value = it.text;
+      const raw = String(it.text || "");
+      const tail = raw.match(ATTACH_TAIL_RE);
+      queueEditTail.value = tail ? tail[0] : "";
+      queueEditText.value = tail ? raw.slice(0, tail.index) : raw;
     }
     function queueSaveEdit(it) {
-      const text = queueEditText.value.trim();
-      if (text && text !== it.text) queueSend({ type: "queue_update", id: it.id, text });
+      const words = queueEditText.value.trim();
+      // Put the inlined file bodies back, so editing the words never drops the evidence.
+      const text = words + (queueEditTail.value || "");
+      if (words && text !== it.text) queueSend({ type: "queue_update", id: it.id, text });
       queueEditId.value = null;
+      queueEditTail.value = "";
     }
     function queueMove(it, dir) {
       const ids = queueItems.value.map((i) => i.id);
@@ -2551,20 +3497,34 @@ export default {
     }
 
     onMounted(() => {
-      connect({ resume: route.query.resume, model_id: route.query.model });
+      // ?new=1 (mobile inbox "New chat") starts a fresh conversation instead of carrying on.
+      connect({ resume: route.query.resume, model_id: route.query.model, fresh: route.query.new === "1" });
       tickTimer = setInterval(() => {
         nowTick.value = Date.now();
       }, 1000);
+      const vv = window.visualViewport;
+      if (vv) {
+        applyViewportHeight();
+        vv.addEventListener("resize", onViewportChange);
+        vv.addEventListener("scroll", onViewportChange);
+      }
     });
     onBeforeUnmount(() => {
       unmounted = true;
       intentionalClose = true;
+      const vv = window.visualViewport;
+      if (vv) {
+        vv.removeEventListener("resize", onViewportChange);
+        vv.removeEventListener("scroll", onViewportChange);
+      }
+      if (vvRaf) cancelAnimationFrame(vvRaf);
       if (tickTimer) clearInterval(tickTimer);
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       if (ws) try { ws.close(); } catch (e) { /* noop */ }
     });
 
     return {
+      root,
       agentId,
       isDecision,
       hostname,
@@ -2617,7 +3577,11 @@ export default {
       queueThreadOpen,
       queueToggleThread,
       queueClose,
+      RECOVERED_NOTE,
       queueHistory,
+      queueHistoryCount,
+      queueHistoryLoading,
+      openQueueHistory,
       queueHistoryOpen,
       queueHistoryView,
       queueClearHistory,
@@ -2625,11 +3589,24 @@ export default {
       queueHistIcon,
       queueHistColor,
       queueHistWhen,
+      queueHistWho,
+      queueThreadWho,
+      queueHistWhoMine,
+      queueHistIsHuman,
+      queueHistFilter,
+      queueHistPeople,
       queueAdd,
       queueSetAuto,
       queueSetAutoClear,
       queuePause,
       queueResume,
+      queueHeadPending,
+      promptWords,
+      queueFiles,
+      queueFileInput,
+      pickQueueFiles,
+      removeQueueFile,
+      onQueueFilePicked,
       queueRunNext,
       queueClearDone,
       queueClearAll,
@@ -2662,6 +3639,42 @@ export default {
       testCompletionAlerts,
       messages,
       input,
+      isPhone,
+      backToInbox,
+      ticketStage,
+      stageColor,
+      pinned,
+      pinnedBy,
+      setPin,
+      presence,
+      isDriver,
+      seatTaken,
+      canTakeOver,
+      takeoverAsk,
+      takeoverPending,
+      requestTakeover,
+      answerTakeover,
+      // attachments
+      attachEnabled,
+      imagesSupported,
+      attachMax,
+      pendingFiles,
+      pendingBytes,
+      dragOver,
+      fileInput,
+      humanSize,
+      fileIcon,
+      pickFiles,
+      onFilePicked,
+      removeFile,
+      clearFiles,
+      onDragEnter,
+      onDragLeave,
+      onDrop,
+      onPaste,
+      previewOpen,
+      previewFile,
+      openPreview,
       targetOptions,
       selectedTarget,
       onTargetChange,
@@ -2694,6 +3707,10 @@ export default {
       approvalQueue,
       respondApprovalAll,
       scrollArea,
+      onTranscriptScroll,
+      pinnedToBottom,
+      heldLabel,
+      jumpToLatest,
       isMulti,
       machinesDialog,
       machineRows,
@@ -2723,10 +3740,70 @@ export default {
 </script>
 
 <style scoped>
+/* PHONE (installed app or any screen under 720px). The toolbar carries eleven things; on a
+   desktop they sit in one row, on a phone that row was clipped with no way to reach the
+   rest. So: the bar WRAPS onto as many rows as it needs, every item stays readable at its
+   normal size, the model picker stretches to the full width on its own row, and the whole
+   bar can still be swiped sideways if a single item is wider than the screen. Nothing is
+   hidden - the owner's rule is "resize so we can read everything", not "remove". */
+@media (max-width: 720px) {
+  .pi-toolbar {
+    flex-wrap: wrap;
+    min-height: 0;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    row-gap: 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .pi-toolbar .pi-title {
+    flex: 1 1 60%;
+    min-width: 0;
+  }
+  .pi-toolbar .q-space {
+    display: none;
+  }
+  .pi-toolbar .pi-target-select {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    order: 10;
+  }
+  .pi-toolbar .q-chip {
+    height: 26px;
+    font-size: 12px;
+  }
+  .pi-composer {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .pi-messages {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
 .pichat {
-  height: 100vh;
+  height: 100vh; /* fallback: browsers without dvh */
+  height: 100dvh; /* follows the mobile browser chrome as it slides away */
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* the transcript scrolls; the shell itself never does */
+}
+/* Set by applyViewportHeight() once the visual viewport is measurable - it is
+   the only measurement that follows the software keyboard. */
+.pichat--measured {
+  height: var(--pichat-h);
+}
+/* Notched phones: keep the send button clear of the home indicator. */
+.pichat .pi-composer {
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 600px) {
+  /* iOS zooms the page in when a focused field is under 16px, and that zoom is
+     itself what shoves the composer off the bottom of the screen. */
+  .pi-composer :deep(textarea),
+  .pi-composer :deep(input) {
+    font-size: 16px;
+  }
 }
 .pichat :deep(.q-toolbar) {
   flex-wrap: nowrap;
@@ -2769,6 +3846,8 @@ export default {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain; /* don't chain the scroll to the page behind */
+  -webkit-overflow-scrolling: touch;
 }
 /* Prompt queue panel: a column to the right of the chat ... */
 .pi-queue {
@@ -2864,18 +3943,68 @@ export default {
   font-size: 13.5px;
   line-height: 1.4;
 }
+/* "Paused - N new below". Sticky at the bottom of the SCROLLER, so it floats over the
+   newest text while you read further up and needs no extra wrapper (which would have
+   changed the flex layout of the whole window). pointer-events on the button only, so the
+   strip never eats a click meant for the transcript underneath. */
+.pi-scroll-held {
+  position: sticky;
+  bottom: 4px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 3;
+  margin-top: 4px;
+}
+.pi-scroll-held > * {
+  pointer-events: auto;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+  opacity: 0.94;
+}
 .pi-queue-hist-when {
   flex: 0 0 64px;
   font-size: 12px;
   padding-top: 2px;
 }
+/* WHO. A fixed column so the names line up and the list can be read down rather than
+   hunted through; long names ellipsize (the tooltip carries the login in full). */
+.pi-queue-hist-who {
+  flex: 0 0 104px;
+  font-size: 12px;
+  font-weight: 600;
+  padding-top: 2px;
+  padding-right: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pi-queue-hist-who-filter {
+  min-width: 150px;
+  font-size: 13px;
+}
 .pi-queue-hist-event {
   font-weight: 600;
+}
+/* "You asked — what they asked". The gap and the dash are CSS/markup rather than a
+   literal " - " in the template: Vue's compiler condenses whitespace at the start of an
+   element, which is why the label ran straight into the prompt ("You askedwrite up..."). */
+.pi-queue-hist-event,
+.pi-queue-hist-sep {
+  margin-right: 6px;
+}
+.pi-queue-hist-sep {
+  margin-left: 0;
 }
 .pi-queue-list {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
+}
+.pi-queue-thumb {
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 2px;
 }
 .pi-queue-item {
   border: 1px solid #3a3a3a;
@@ -2939,6 +4068,27 @@ export default {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+}
+/* ---- attachments ---- */
+.pi-attach-thumb {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 6px;
+  border: 1px solid #455a64;
+  cursor: zoom-in;
+  object-fit: cover;
+}
+.pi-drop-active {
+  outline: 2px dashed #42a5f5;
+  outline-offset: -4px;
+}
+.pi-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: rgba(21, 101, 192, 0.35);
+  color: #e3f2fd;
+  pointer-events: none;
 }
 .pi-bubble {
   max-width: min(85%, 56rem);
