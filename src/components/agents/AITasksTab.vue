@@ -26,6 +26,42 @@
           color="primary"
           @click="addTask"
         />
+        <!-- WHOSE CLOCK. Times in this table are meaningless without a named zone -
+             "03:00" was previously shown bare while the scheduler used UTC. Default is
+             the device's own timezone (what an MSP means by "the client's time"); pick
+             any zone to see when a task lands there instead. -->
+        <q-select
+          v-model="viewTz"
+          :options="tzOptions"
+          emit-value
+          map-options
+          use-input
+          fill-input
+          hide-selected
+          input-debounce="0"
+          dense
+          outlined
+          options-dense
+          style="min-width: 230px"
+          class="q-mr-sm"
+          label="Times shown in"
+          @filter="filterTz"
+        >
+          <template #prepend><q-icon name="schedule" size="xs" /></template>
+          <q-tooltip max-width="380px">
+            Every time in this table is shown in this zone. &ldquo;Device timezone&rdquo;
+            uses each machine&rsquo;s own zone
+            <template v-if="deviceTzLabel"> ({{ deviceTzLabel }})</template>, which is
+            what a maintenance window agreed with a customer is in.
+            <template v-if="tzIsInherited">
+              <br /><b>Note:</b> no timezone is set on
+              <template v-if="mode === 'agent'">this device</template>
+              <template v-else>these devices</template>, so this is the global default
+              from Global Settings &mdash; set it per device (Agent &rarr; Edit &rarr;
+              Timezone) for it to mean the customer&rsquo;s own clock.
+            </template>
+          </q-tooltip>
+        </q-select>
         <q-btn dense flat icon="refresh" @click="load" />
       </div>
       <q-separator />
@@ -95,7 +131,66 @@
           </q-td>
         </template>
         <template #body-cell-schedule="props">
-          <q-td :props="props">{{ props.row._kind === 'created' ? ('Once · ' + formatTime(props.row.run_at)) : scheduleText(props.row) }}</q-td>
+          <q-td :props="props">
+            <template v-if="props.row._kind === 'created'">
+              Once &middot; {{ fmtIn(props.row.run_at, rowTz(props.row)) }}
+            </template>
+            <template v-else>
+              {{ scheduleText(props.row) }}
+              <!-- The zone a wall-clock schedule is AUTHORED in is part of the schedule,
+                   not decoration: "daily 03:00" fires at a different moment in each one. -->
+              <q-badge
+                v-if="scheduleHasClock(props.row)"
+                class="q-ml-xs"
+                :color="props.row.schedule_timezone ? 'blue-grey-7' : 'teal-8'"
+                :label="shortTz(props.row.effective_timezone)"
+              />
+              <q-tooltip v-if="scheduleHasClock(props.row)" max-width="420px">
+                Runs at {{ props.row.run_time }} in
+                <b>{{ props.row.effective_timezone }}</b>
+                <template v-if="props.row.schedule_timezone">
+                  (pinned to that zone on the task)
+                </template>
+                <template v-else>
+                  (the device&rsquo;s own timezone &mdash; follows the machine)
+                </template>
+                <template v-if="props.row.next_run">
+                  <br />Next: {{ fmtIn(props.row.next_run, props.row.effective_timezone) }}
+                  <template v-if="rowTz(props.row) !== props.row.effective_timezone">
+                    = {{ fmtIn(props.row.next_run, rowTz(props.row)) }}
+                  </template>
+                </template>
+              </q-tooltip>
+            </template>
+          </q-td>
+        </template>
+        <template #body-cell-next_run="props">
+          <q-td :props="props" class="no-wrap">
+            <template v-if="props.row._kind === 'created'">
+              <span :class="props.row.status === 'scheduled' ? '' : 'text-grey-6'">
+                {{ fmtIn(props.row.run_at, rowTz(props.row)) || "\u2014" }}
+              </span>
+            </template>
+            <template v-else-if="props.row.enabled && props.row.next_run">
+              {{ fmtIn(props.row.next_run, rowTz(props.row)) }}
+              <q-tooltip max-width="380px">
+                {{ fmtIn(props.row.next_run, rowTz(props.row), true) }}
+                <br />Device time ({{ props.row.agent_timezone }}):
+                {{ fmtIn(props.row.next_run, props.row.agent_timezone) }}
+                <br />UTC: {{ fmtIn(props.row.next_run, "UTC") }}
+              </q-tooltip>
+            </template>
+            <span v-else class="text-grey-6">&mdash;</span>
+          </q-td>
+        </template>
+        <template #body-cell-last_run="props">
+          <q-td :props="props" class="no-wrap">
+            <template v-if="props.row.last_run">
+              {{ fmtIn(props.row.last_run, rowTz(props.row)) }}
+              <q-tooltip>{{ fmtIn(props.row.last_run, rowTz(props.row), true) }}</q-tooltip>
+            </template>
+            <span v-else class="text-grey-6">never</span>
+          </q-td>
         </template>
         <template #body-cell-last_status="props">
           <q-td :props="props">
@@ -414,10 +509,38 @@
                 type="time"
                 outlined
                 dense
-                label="At time (server time)"
+                label="At time"
                 class="col"
               />
             </div>
+            <!-- WHICH CLOCK the time above is on. Blank = the device's, so a task moves
+                 with the machine; pin a zone for work tied to a business process instead
+                 of to a location. -->
+            <q-select
+              v-if="form.schedule_type !== 'interval'"
+              v-model="form.schedule_timezone"
+              :options="scheduleTzOptions"
+              emit-value
+              map-options
+              use-input
+              fill-input
+              hide-selected
+              input-debounce="0"
+              outlined
+              dense
+              options-dense
+              label="That time is in"
+              @filter="filterScheduleTz"
+            >
+              <template #hint>
+                <span v-if="!form.schedule_timezone">
+                  Follows the device&rsquo;s timezone
+                  <template v-if="deviceTzLabel">({{ deviceTzLabel }})</template>
+                  &mdash; if the machine moves, so does the window.
+                </span>
+                <span v-else>Always {{ form.run_time }} in {{ form.schedule_timezone }}.</span>
+              </template>
+            </q-select>
             <div v-if="form.schedule_type === 'weekly'">
               <div class="text-caption q-mb-xs">Days of week</div>
               <div class="row q-gutter-sm">
@@ -713,7 +836,9 @@ export default {
         name: r.action,
         last_status: r.status,
         last_status_rank: 5,
-        last_run: formatTime(r.run_at),
+        // RAW instant, not a pre-formatted string: the table renders it in whichever
+        // timezone the operator has selected, and a baked string cannot be re-zoned.
+        last_run: r.run_at,
       }));
       return [...tasks.value, ...created];
     });
@@ -738,6 +863,7 @@ export default {
         { name: "model_display", label: "Model", field: "model_display", align: "left" },
         { name: "alert_threshold", label: "Alert", field: "alert_threshold", align: "left" },
         { name: "by", label: "By", field: (r) => r.modified_by || r.created_by || "", align: "left", sortable: true },
+        { name: "next_run", label: "Next run", field: "next_run", align: "left", sortable: true },
         { name: "last_run", label: "Last run", field: "last_run", align: "left", sortable: true },
         { name: "last_status", label: "Status", field: "last_status_rank", align: "left", sortable: true },
         { name: "enabled", label: "On", field: "enabled", align: "center" },
@@ -767,13 +893,24 @@ export default {
     ];
     function scheduleText(row) {
       if (row.run_mode === "now") return "Now (one-shot)";
-      if (row.schedule_type === "once") return `Once at ${row.run_time || "?"}`;
-      if (row.schedule_type === "daily") return `Daily at ${row.run_time || "?"}`;
+      const at = hhmm(row.run_time);
+      if (row.schedule_type === "once") return `Once at ${at}`;
+      if (row.schedule_type === "daily") return `Daily at ${at}`;
       if (row.schedule_type === "weekly")
-        return `Weekly ${(row.weekly_days || []).map((d) => weekDays[d].label).join(",")} at ${row.run_time || "?"}`;
+        return `Weekly ${(row.weekly_days || []).map((d) => weekDays[d].label).join(",")} at ${at}`;
       if (row.schedule_type === "monthly")
-        return `Monthly day ${row.monthly_day} at ${row.run_time || "?"}`;
+        return `Monthly day ${row.monthly_day} at ${at}`;
       return `Every ${row.interval_minutes} min`;
+    }
+    // "03:00:00" -> "03:00". The seconds are always zero and only cost width.
+    function hhmm(t) {
+      const v = String(t || "");
+      return v ? v.slice(0, 5) : "?";
+    }
+    // Does this schedule have a wall clock in it? An interval ("every 60 min") does not,
+    // so naming a timezone for it would be noise.
+    function scheduleHasClock(row) {
+      return row.run_mode !== "now" && row.schedule_type !== "interval";
     }
     function statusColor(s) {
       return {
@@ -781,13 +918,165 @@ export default {
         scheduled: "blue-grey", done: "green", cancelled: "grey",
       }[s] || "grey";
     }
-    function formatTime(ts) {
-      if (!ts) return "";
+    // ---- timezones ---------------------------------------------------------
+    //
+    // Every absolute time in this table (next run, last run, one-shot run_at) is a real
+    // instant, so it can be shown correctly in ANY zone. The default is the device's own
+    // - "the client's timezone" - because that is the clock a customer's maintenance
+    // window was agreed on, and it is the one the scheduler now uses when a task's
+    // schedule_timezone is blank.
+    const TZ_DEVICE = "";                      // sentinel: follow each row's device
+    const viewTz = ref(TZ_DEVICE);
+    const browserTz = (() => {
       try {
-        return new Date(ts).toLocaleString();
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
       } catch (e) {
-        return ts;
+        return "UTC";
       }
+    })();
+
+    /** Which zone THIS row is rendered in. */
+    function rowTz(row) {
+      if (viewTz.value) return viewTz.value;
+      // AI-created scheduled actions carry no agent record, so they borrow the table's
+      // device zone when there is exactly one - showing a customer's overnight action in
+      // the technician's own timezone is the confusion this whole change is about.
+      const dev = deviceTzLabel.value;
+      const single = dev && (dev.includes("/") || dev === "UTC") ? dev : "";
+      return row?.agent_timezone || row?.effective_timezone || single || browserTz;
+    }
+
+    /** Format an ISO instant in a named zone. `long` adds the date in full + zone name. */
+    function fmtIn(ts, tz, long = false) {
+      if (!ts) return "";
+      const zone = tz || browserTz;
+      try {
+        return new Intl.DateTimeFormat(undefined, {
+          timeZone: zone,
+          ...(long
+            ? { dateStyle: "full", timeStyle: "long" }
+            : {
+                day: "2-digit", month: "short",
+                hour: "2-digit", minute: "2-digit", hour12: false,
+                timeZoneName: "short",
+              }),
+        }).format(new Date(ts));
+      } catch (e) {
+        // An unknown zone must degrade to a readable time, not to an empty cell.
+        try {
+          return new Date(ts).toLocaleString();
+        } catch (e2) {
+          return String(ts);
+        }
+      }
+    }
+    // Kept for the places that just want "a time, in this row's zone" (AI-created rows
+    // are built before the row object exists, so they pass no row).
+    function formatTime(ts) {
+      return fmtIn(ts, viewTz.value || browserTz);
+    }
+    /** "Europe/London" -> "London"; UTC stays UTC. Enough for a badge. */
+    function shortTz(tz) {
+      const v = String(tz || "");
+      if (!v) return "";
+      const tail = v.includes("/") ? v.split("/").pop() : v;
+      return tail.replace(/_/g, " ");
+    }
+
+    // The device timezone(s) behind the current table, for labelling the "Device
+    // timezone" option. One machine names it; a mixed scope says how many.
+    // True when every device zone behind this table is inherited from Global Settings
+    // rather than set on the machine - i.e. "the client's timezone" is a guess.
+    const tzIsInherited = computed(() => {
+      const rows = tasks.value.filter((t) => t.agent_timezone_source);
+      return rows.length > 0 && rows.every((t) => t.agent_timezone_source === "global");
+    });
+
+    const deviceTzLabel = computed(() => {
+      const zones = [
+        ...new Set(
+          tasks.value.map((t) => t.agent_timezone).filter(Boolean),
+        ),
+      ];
+      if (zones.length === 1) return zones[0];
+      if (zones.length > 1) return `${zones.length} zones`;
+      return "";
+    });
+
+    // The full IANA list where the browser can supply it (Chrome/Firefox/Safari all can
+    // now); otherwise a short practical list. Zones actually in use here are pinned to
+    // the top so the common choice is never a search away.
+    const ALL_TZ = (() => {
+      let list = [];
+      try {
+        list = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : [];
+      } catch (e) {
+        list = [];
+      }
+      if (!list.length) {
+        list = [
+          "UTC", "Europe/London", "Europe/Dublin", "Europe/Paris", "Europe/Berlin",
+          "Europe/Madrid", "Europe/Warsaw", "Europe/Athens", "America/New_York",
+          "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto",
+          "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo",
+          "Australia/Sydney", "Pacific/Auckland",
+        ];
+      }
+      return list;
+    })();
+
+    function tzChoices() {
+      const inUse = [
+        ...new Set(tasks.value.map((t) => t.agent_timezone).filter(Boolean)),
+      ];
+      const head = [
+        { label: deviceTzLabel.value
+            ? `Device timezone (${deviceTzLabel.value})`
+            : "Device timezone", value: TZ_DEVICE },
+        ...inUse.map((z) => ({ label: z, value: z })),
+        { label: `My browser (${browserTz})`, value: browserTz },
+        { label: "UTC", value: "UTC" },
+      ];
+      const seen = new Set(head.map((h) => h.value));
+      return [
+        ...head,
+        ...ALL_TZ.filter((z) => !seen.has(z)).map((z) => ({ label: z, value: z })),
+      ];
+    }
+    const tzOptions = ref([]);
+    function filterTz(val, update) {
+      update(() => {
+        const all = tzChoices();
+        const needle = String(val || "").toLowerCase();
+        tzOptions.value = needle
+          ? all.filter((o) => o.label.toLowerCase().includes(needle))
+          : all;
+      });
+    }
+
+    // The editor's own list: blank means "follow the device", which is the default for a
+    // new task and the only option that keeps working if the machine is moved.
+    const scheduleTzOptions = ref([]);
+    function scheduleTzChoices() {
+      const dev = form.value?.agent_timezone || deviceTzLabel.value;
+      return [
+        { label: dev ? `Device timezone (${dev})` : "Device timezone", value: "" },
+        ...(dev ? [] : []),
+        { label: `My browser (${browserTz})`, value: browserTz },
+        { label: "UTC", value: "UTC" },
+        ...ALL_TZ.filter((z) => z !== browserTz && z !== "UTC").map((z) => ({
+          label: z, value: z,
+        })),
+      ];
+    }
+    function filterScheduleTz(val, update) {
+      update(() => {
+        const all = scheduleTzChoices();
+        const needle = String(val || "").toLowerCase();
+        scheduleTzOptions.value = needle
+          ? all.filter((o) => o.label.toLowerCase().includes(needle))
+          : all;
+      });
     }
 
     // eslint-disable-next-line no-use-before-define
@@ -844,6 +1133,10 @@ export default {
         schedule_type: "daily",
         interval_minutes: 60,
         run_time: "03:00",
+        // Blank = the device's own timezone. A new maintenance window belongs to the
+        // customer's clock, not to whatever the server happens to run on.
+        schedule_timezone: "",
+        agent_timezone: deviceTzLabel.value,
         weekly_days: [],
         monthly_day: 1,
         alert_threshold: "alert",
@@ -858,6 +1151,7 @@ export default {
       const f = {
         run_mode: "schedule",
         weekly_days: [],
+        schedule_timezone: "",
         primary_role: "",
         // deep-copy so editing rows doesn't mutate the table row until Save
         machines: JSON.parse(JSON.stringify(row.machines || [])),
@@ -998,6 +1292,9 @@ export default {
       loadModels();
       load();
       getAgentOptions();
+      // Seed both zone pickers so they are usable before anyone types in them.
+      tzOptions.value = tzChoices();
+      scheduleTzOptions.value = scheduleTzChoices();
     });
     onBeforeUnmount(stopLivePoll);
 
@@ -1089,6 +1386,17 @@ export default {
       counts,
       weekDays,
       scheduleText,
+      scheduleHasClock,
+      viewTz,
+      tzOptions,
+      filterTz,
+      scheduleTzOptions,
+      filterScheduleTz,
+      deviceTzLabel,
+      tzIsInherited,
+      rowTz,
+      fmtIn,
+      shortTz,
       statusColor,
       formatTime,
       load,

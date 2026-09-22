@@ -39,6 +39,29 @@
         <q-btn dense flat round icon="refresh" :loading="loading" @click="load" />
       </q-card-section>
       <q-separator />
+      <!-- Two tabs: the how (Procedures) and the which/how-far (Ticket Automation Subjects). -->
+      <q-tabs
+        v-model="tab"
+        dense
+        align="left"
+        active-color="primary"
+        indicator-color="primary"
+        narrow-indicator
+        class="text-grey-8"
+      >
+        <q-tab name="procedures" icon="menu_book" label="Procedures" no-caps />
+        <q-tab name="subjects" icon="smart_toy" no-caps>
+          <div class="row items-center no-wrap">
+            Ticket Automation Subjects
+            <q-badge v-if="subjectsProposed" color="amber-9" class="q-ml-xs" :label="subjectsProposed">
+              <q-tooltip>{{ subjectsProposed }} proposal(s) from the daily report awaiting approval</q-tooltip>
+            </q-badge>
+          </div>
+        </q-tab>
+      </q-tabs>
+      <q-separator />
+      <q-tab-panels v-model="tab" animated class="proc-panels">
+      <q-tab-panel name="procedures" class="q-pa-none proc-panel">
 
       <div class="row items-center q-px-md q-py-sm q-gutter-sm">
         <q-select
@@ -70,7 +93,6 @@
         <div class="text-caption text-grey-7">{{ rows.length }} shown / {{ total }} total</div>
       </div>
       <q-separator />
-
       <div class="proc-table-wrap">
         <q-table
           ref="procTable"
@@ -131,6 +153,11 @@
           </template>
         </q-table>
       </div>
+      </q-tab-panel>
+      <q-tab-panel name="subjects" class="q-pa-none proc-panel">
+        <ai-ticket-automation-subjects @counts="onSubjectCounts" />
+      </q-tab-panel>
+      </q-tab-panels>
     </q-card>
 
     <!-- editor -->
@@ -285,9 +312,11 @@ import {
   getMiningStatus,
   stopMining,
 } from "@/api/core";
+import AITicketAutomationSubjects from "@/components/core/AITicketAutomationSubjects.vue";
 
 export default defineComponent({
   name: "AIProcedures",
+  components: { AiTicketAutomationSubjects: AITicketAutomationSubjects },
   setup() {
     const $q = useQuasar();
     const rows = ref([]);
@@ -309,6 +338,9 @@ export default defineComponent({
       const v = route.query[key];
       return typeof v === "string" && v.length ? v.replace(/^#/, "") : fallback;
     };
+    const tab = ref(seed("tab", "procedures") === "subjects" ? "subjects" : "procedures");
+    const subjectsProposed = ref(0);
+    const onSubjectCounts = (c) => { subjectsProposed.value = Number(c?.proposed || 0); };
     const q = ref(seed("q"));
     const category = ref(seed("category"));
     const statusFilter = ref(seed("status"));
@@ -538,6 +570,9 @@ export default defineComponent({
 
     load();
     return {
+      tab,
+      subjectsProposed,
+      onSubjectCounts,
       rows, categories, allCategories, total, loading, mining, saving, q, category, statusFilter,
       editDialog, edit, editIndex, navList, procTable, pagination, columns, confColor, statusColor,
       liveDialog, live, logBox, openLive, onLiveHide, stopping, stopMine,
@@ -570,6 +605,13 @@ export default defineComponent({
   overflow: hidden;
 }
 /* Fill the popup/window; never force awkward horizontal overflow */
+.proc-panels,
+.proc-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .proc-table-wrap {
   flex: 1 1 auto;
   min-height: 0;

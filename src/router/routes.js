@@ -70,6 +70,15 @@ const routes = [
     },
   },
   {
+    // The phone app's home screen (installable PWA; see public/manifest.webmanifest).
+    path: "/m",
+    name: "PiMobile",
+    component: () => import("@/views/PiMobile.vue"),
+    meta: {
+      requireAuth: true,
+    },
+  },
+  {
     path: "/pichat/:agent_id",
     name: "PiChat",
     component: () => import("@/views/PiChat.vue"),

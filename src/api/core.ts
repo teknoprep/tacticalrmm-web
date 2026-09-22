@@ -577,3 +577,63 @@ export async function runAIReportScheduleNow(id: number) {
 // --- AI spend ledger report ---------------------------------------------------
 // NOTE: AI Spend is a SCHEDULED REPORT kind (see AIReportSchedules), not a separate
 // screen. The /core/ai/spend-report/ endpoint remains available for ad-hoc queries.
+
+// ---- Ticket Automation Subjects -------------------------------------------------------
+// The kinds of ticket the AI may work on its own (Procedures page -> subsection).
+export interface AITicketAutomationSubject {
+  id: number;
+  name: string;
+  description: string;
+  status: "proposed" | "approved" | "rejected" | "retired";
+  enabled: boolean;
+  mode: "advise" | "device_readonly" | "device_fix";
+  mode_display?: string;
+  match: Record<string, unknown>;
+  procedures: number[];
+  procedure_titles?: string[];
+  kb_article_ids: number[];
+  instructions: string;
+  all_clients: boolean;
+  clients: string[];
+  domains: string[];
+  baseline_minutes: number | null;
+  proposal_reason: string;
+  proposal_tickets: string[];
+  approved_at: string | null;
+  approved_by: string;
+  tickets_matched: number;
+  tickets_worked: number;
+  tickets_deduped: number;
+  last_worked: string | null;
+  updated: string;
+}
+
+export async function fetchAutomationSubjects(status?: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/automation-subjects/`, {
+    params: status ? { status } : {},
+  });
+  return data as { subjects: AITicketAutomationSubject[]; modes: [string, string][] };
+}
+export async function createAutomationSubject(payload: Partial<AITicketAutomationSubject>) {
+  const { data } = await axios.post(`${baseUrl}/ai/automation-subjects/`, payload);
+  return data as AITicketAutomationSubject;
+}
+export async function updateAutomationSubject(id: number, payload: Partial<AITicketAutomationSubject>) {
+  const { data } = await axios.put(`${baseUrl}/ai/automation-subjects/${id}/`, payload);
+  return data as AITicketAutomationSubject;
+}
+export async function deleteAutomationSubject(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/automation-subjects/${id}/`);
+  return data;
+}
+
+// ---- Pi.dev mobile inbox ----------------------------------------------------------------
+export async function fetchMobileInbox() {
+  const { data } = await axios.get(`${baseUrl}/ai/mobile/inbox/`);
+  return data as {
+    decisions: Record<string, unknown>[];
+    chats: Record<string, unknown>[];
+    agents: { agent_id: string; hostname: string; client: string; online: boolean }[];
+    me: { username: string; can_take_over: boolean };
+  };
+}

@@ -418,6 +418,27 @@
         />
       </template>
     </settings-section>
+    <!-- How often the safety-net poll runs. Tickets are triaged on arrival by the
+         helpdesk's own webhook, so this is only the net for missed/re-opened work. -->
+    <div class="row items-center q-mb-sm">
+      <q-input
+        :model-value="settings.ai_ticket_poll_minutes"
+        type="number"
+        dense
+        outlined
+        min="0"
+        max="1440"
+        style="max-width: 110px"
+        label="Re-triage poll (min)"
+        @update:model-value="update('ai_ticket_poll_minutes', Number($event) || 0)"
+      />
+      <info-tip
+        text="New tickets are triaged the moment they enter New (the helpdesk calls us directly), so this poll is
+              the safety net: it catches tickets missed while we were down, tickets someone re-opened, and replies
+              on existing tickets that need another look. 10 minutes is the recommended value. 0 turns the poll off
+              entirely and relies on the webhook alone. Takes effect immediately - no restart."
+      />
+    </div>
     <div class="row items-center q-mb-xs">
       <q-toggle
         :model-value="settings.ai_ticket_act_on_alerts"
@@ -670,51 +691,26 @@
     </div>
 
     <settings-section
-      title="Remote (mobile) — work an AI window from your phone"
-      tip="Lets a technician pair a phone to ONE open Pi Chat or AI Decision window and carry on that same conversation from it. There is no default relay on purpose: a relay can see the conversation passing through it, so it has to be one you chose."
-    >
-      <template #action>
-        <q-toggle
-          :model-value="settings.ai_remote_enabled"
-          label="Enabled"
-          :disable="!(settings.ai_remote_relay_url || '').trim()"
-          @update:model-value="update('ai_remote_enabled', $event)"
-        />
-      </template>
-    </settings-section>
-    <div class="text-caption text-grey q-mb-sm">
-      A technician opens a device chat or a ticket chat as normal, presses
-      <strong>Remote</strong> in that window, and scans the QR code with the Remote Pi mobile
-      app. The phone then follows the <strong>same</strong> conversation &mdash; it can read
-      the stream, reply, and approve or deny device actions &mdash; which is what makes a
-      ticket workable from a machine room or a customer site. The phone inherits the window's
-      state and cannot raise it: no Write mode it wasn't already in, no model outside the
-      role's list, no new chats. <strong>Closing the window closes the connection.</strong>
-      Nothing survives it.
-    </div>
-    <div class="text-caption text-orange-8 q-mb-sm">
-      The relay is a network boundary. Traffic to it is TLS-protected, but the relay operator
-      can see the protocol content and metadata passing through &mdash; it is not end-to-end
-      encrypted. Point this at a relay you run or trust, ideally behind a VPN. Leave it blank
-      and the feature stays completely unavailable.
-    </div>
-    <div class="row q-col-gutter-md items-start q-mb-sm">
+      title="Live chat sessions — the AI runs on the server"
+      tip="A Pi Chat or AI Decision session runs on the bridge; every browser tab and the phone app are views onto it. Dropping your connection does not stop the AI. One person drives; everyone else sees it read-only. Taking over needs the role permission 'Take over an AI session' (superusers always can)."
+    />
+    <div class="row items-center q-gutter-md q-mb-md">
       <q-input
-        class="col-7"
+        class="col-3"
+        type="number"
+        min="0"
         dense
         outlined
-        clearable
-        :model-value="settings.ai_remote_relay_url"
-        label="Relay URL"
-        placeholder="https://relay.example.com"
-        hint="http:// or https:// — the address your reverse proxy serves. The WebSocket form is derived from it."
-        @update:model-value="update('ai_remote_relay_url', $event || '')"
+        :model-value="settings.ai_chat_detach_grace_minutes"
+        label="Stop after nobody is watching for (minutes)"
+        hint="0 = never stop on its own"
+        @update:model-value="update('ai_chat_detach_grace_minutes', Number($event))"
       />
       <div class="col text-caption text-grey">
-        Users also need the role permission
-        <strong>Use AI from mobile (Remote Pi)</strong> before the button appears in their
-        chat windows. Pairing is per technician: a phone paired by one user can never attach
-        to another user's window.
+        When the <b>last</b> viewer disconnects, the session &mdash; including a turn in flight &mdash;
+        keeps running for this long. Reconnect within it (same person, another tab, or the phone
+        app) and you pick the session straight back up, mid-stream. Set 0 to keep sessions alive
+        until someone explicitly starts a new chat.
       </div>
     </div>
 
@@ -1062,6 +1058,41 @@
         label="First-run backfill (days)"
         :disable="!settings.ai_procedures_enabled"
         @update:model-value="update('ai_procedures_backfill_days', Number($event))"
+      />
+    </div>
+    <!-- AUTO-APPROVAL. Two gates, BOTH required: a well-written fix seen once is a guess;
+         a fix seen fifty times that the reviewer rated 40 is fifty tickets of something we
+         do not understand. Applied by the miner as counts grow and by the consolidation. -->
+    <div class="text-subtitle2 q-mt-sm">Auto-approve procedures</div>
+    <div class="text-caption text-grey-7 q-mb-xs">
+      A procedure is approved without a human only when <b>both</b> are met. Approved procedures
+      are what Ticket Automation Subjects work from, so this is the bar for unattended work.
+    </div>
+    <div class="row q-col-gutter-md q-mb-md">
+      <q-input
+        class="col-6"
+        type="number"
+        min="0"
+        max="100"
+        dense
+        outlined
+        :model-value="settings.ai_procedure_auto_approve_score"
+        label="Confidence score at least (0-100)"
+        hint="The AI's rating that the procedure is correct, complete and general. Capped by evidence: seen once maxes at 70, twice 80, 3-4 at 90."
+        :disable="!settings.ai_procedures_enabled"
+        @update:model-value="update('ai_procedure_auto_approve_score', Number($event))"
+      />
+      <q-input
+        class="col-6"
+        type="number"
+        min="1"
+        dense
+        outlined
+        :model-value="settings.ai_procedure_auto_approve_seen"
+        label="Times seen at least"
+        hint="How many real tickets the procedure has been distilled from."
+        :disable="!settings.ai_procedures_enabled"
+        @update:model-value="update('ai_procedure_auto_approve_seen', Number($event))"
       />
     </div>
     <q-expansion-item

@@ -171,18 +171,30 @@
                 </q-tooltip>
               </q-checkbox>
               <q-checkbox
-                v-model="localRole.can_use_ai_remote"
-                label="Use AI from mobile (Remote Pi)"
+                v-model="localRole.can_take_over_ai_session"
+                label="Take over an AI session someone else is driving"
               >
                 <q-tooltip>
-                  Lets this role pair a phone to an OPEN Pi Chat or AI Decision window
-                  and work that same conversation from it &mdash; read the stream, reply,
-                  and approve device actions while away from the desk. It grants no new
-                  capability: the phone inherits the window's state (read-only vs write,
-                  auto-approve, allowed models) and cannot raise it. What it does grant is
-                  reach, so it is its own permission. Requires a relay URL to be set in
-                  Global Settings &rarr; Pi.dev AI &rarr; Remote (mobile); with no relay
-                  configured, nobody gets it. Closing the window closes the connection.
+                  AI chats run on the server; anyone who opens one that another person is
+                  driving sees it read-only. This lets the role take the seat. If the current
+                  driver is a superuser they must agree first (no answer = no); otherwise the
+                  take-over is immediate and the previous driver keeps watching. Superusers
+                  always have this.
+                </q-tooltip>
+              </q-checkbox>
+              <q-checkbox
+                v-model="localRole.can_use_ai_sales"
+                label="Use Sales / ERP quotation tools"
+              >
+                <q-tooltip>
+                  Lets this role create, read and amend Odoo QUOTATIONS from the AI
+                  Decision window. Without it the sales tool is never loaded, so the AI
+                  cannot touch the ERP or even offer to. With it, quotation changes
+                  behave like device changes: they need Write mode, and Auto-approve
+                  skips the per-call prompt. Quotes stay drafts &mdash; the AI never
+                  confirms a Sales Order and never sends one to a customer by itself.
+                  Also requires the ERP to be wired up in Global Settings &rarr; Pi.dev
+                  AI &rarr; Sales.
                 </q-tooltip>
               </q-checkbox>
               <q-checkbox
@@ -579,7 +591,8 @@ export default {
           can_use_ai_mutate: false,
           can_use_ai_autoapprove: false,
           can_use_ai_autocredential: false,
-          can_use_ai_remote: false,
+          can_take_over_ai_session: false,
+          can_use_ai_sales: false,
           can_manage_all_ai_tasks: false,
           can_view_ai_cost: false,
           ai_allowed_models: [],
