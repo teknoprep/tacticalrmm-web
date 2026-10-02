@@ -72,12 +72,17 @@
         <q-btn dense flat icon="add" label="Add provider" no-caps @click="addProvider" />
       </template>
     </settings-section>
+    <!-- Wide tables are what made Global Settings scroll sideways: a fixed set of columns in a
+         narrow splitter pane. `wrap-cells` lets the text fold, and the secondary columns drop away
+         below `md` instead of pushing the table past the edge of the window. -->
     <q-table
       :rows="providers"
       :columns="providerColumns"
+      :visible-columns="providerVisible"
       row-key="id"
       dense
       flat
+      wrap-cells
       hide-bottom
       :pagination="{ rowsPerPage: 0 }"
     >
@@ -126,9 +131,11 @@
     <q-table
       :rows="models"
       :columns="modelColumns"
+      :visible-columns="modelVisible"
       row-key="id"
       dense
       flat
+      wrap-cells
       hide-bottom
       :pagination="{ rowsPerPage: 0 }"
     >
@@ -151,6 +158,55 @@
     </q-table>
 
     <AIAgentGroups />
+    <AIRelayKeys />
+
+    <!-- WHICH AGENT GROUP RUNS EACH AUTOMATED JOB. One table, one idea: every row says what
+         thinks for that job, and the top row is the default the others inherit. There used to be
+         a separate "preferred agent group" select sitting next to a "routing per rule" table,
+         which was two names for the same decision. -->
+    <settings-section
+      title="Which agent group runs each automated job"
+      tip="The jobs the AI runs with nobody watching - ticket triage, autowork, the procedure miner, auto-resolve, scheduled actions and the reports. Each job uses the group in its row: the group's orchestrator thinks, it can hand work to the group's specialists, and the group's provider keys pay for it. A blank row uses the row above it. A single automation can still name its own group in Ticket Automation Subjects, and that wins over everything here."
+    />
+    <q-card-section class="q-gutter-md">
+      <!-- A select with no options is indistinguishable from a select that ignores you: it opens,
+           shows nothing, and looks broken. So the count is stated, and a failed load says so
+           instead of silently refusing to be set. -->
+      <div class="text-caption" :class="groups.length ? 'text-grey-7' : 'text-negative'">
+        <template v-if="groups.length">{{ groups.length }} agent group(s) available.</template>
+        <template v-else>
+          Agent groups could not be loaded, so this table cannot be set. Reload the page
+          (Ctrl-Shift-R) and check Settings &gt; Pi.dev AI &gt; Agent Groups still lists them.
+        </template>
+      </div>
+      <div class="agent-routing">
+        <div v-for="row in routingRows" :key="row.key" class="routing-row">
+          <div class="routing-label">
+            <div class="text-body2">{{ row.label }}</div>
+            <div class="text-caption text-grey-7">{{ row.hint }}</div>
+          </div>
+          <q-select
+            class="routing-select"
+            :model-value="row.value"
+            :options="agentGroupOptions"
+            option-label="label"
+            option-value="value"
+            emit-value
+            map-options
+            clearable
+            outlined
+            dense
+            :display-value="agentGroupDisplay(row.value)"
+            :placeholder="row.placeholder"
+            @update:model-value="setRouting(row.key, $event)"
+          />
+        </div>
+      </div>
+      <div class="text-caption text-grey-7">
+        A blank row uses the default at the top. Their own automation can name a group in
+        <b>Ticket Automation Subjects</b> — that choice wins over this table.
+      </div>
+    </q-card-section>
 
     <!-- standalone desktop / browser execution policy -->
     <settings-section
@@ -1203,12 +1259,17 @@
         <q-card-section class="q-gutter-sm">
           <q-select
             v-model="providerForm.name"
-            :options="providerNameOptions"
+            :options="filteredProviderOptions"
             emit-value
             map-options
             outlined
             dense
+            use-input
+            input-debounce="0"
+            @filter="filterProviderOptions"
+            :loading="loadingNativeProviders"
             label="Provider"
+            :hint="providerHint"
             :disable="!!providerForm.id"
           />
           <q-input
@@ -1223,7 +1284,9 @@
             v-model="providerForm.base_url"
             outlined
             dense
-            label="Base URL (optional, for custom/self-hosted)"
+            label="Base URL (optional)"
+            :placeholder="selectedNativeProvider?.base_url || ''"
+            :hint="selectedNativeProvider?.base_url_required ? 'Required for this provider' : 'Leave blank to use pi\'s built-in endpoint'"
           />
           <q-checkbox v-model="providerForm.enabled" label="Enabled" />
         </q-card-section>
@@ -1295,10 +1358,22 @@
           <q-input v-model="modelForm.display_name" outlined dense label="Display name" />
           <q-select
             v-model="modelForm.thinking_level"
-            :options="['off', 'minimal', 'low', 'medium', 'high']"
+            :options="thinkingOptions"
             outlined
             dense
             label="Thinking level"
+            :hint="thinkingHint"
+          />
+          <q-input
+            v-model.number="modelForm.auto_summarize_k"
+            type="number"
+            outlined
+            dense
+            :min="20"
+            :max="1000"
+            suffix="k tokens"
+            label="Auto-summarize at"
+            hint="For chats on this model that are NOT in an agent group (a group's own setting applies there). A window's own setting still wins. Default 100k."
           />
           <q-checkbox v-model="modelForm.enabled" label="Enabled" />
           <q-checkbox v-model="modelForm.is_default" label="Default model" />
@@ -1315,7 +1390,9 @@
 <script>
 import AIReportSchedules from "@/components/modals/coresettings/AIReportSchedules.vue";
 import AIAgentGroups from "@/components/modals/coresettings/AIAgentGroups.vue";
+import AIRelayKeys from "@/components/modals/coresettings/AIRelayKeys.vue";
 import { ref, computed, onMounted } from "vue";
+import { useQuasar } from "quasar";
 import {
   fetchAIProviders,
   saveAIProvider,
@@ -1326,6 +1403,7 @@ import {
   editAIModel,
   deleteAIModel,
   fetchAvailableAIModels,
+  fetchNativeAIProviders,
   helpdeskAssist,
   helpdeskCaps,
   lintVerifiers,
@@ -1345,12 +1423,13 @@ import { fetchAgents } from "@/api/agents";
 
 export default {
   name: "AISettings",
-  components: { SettingsSection, InfoTip, AIReportSchedules, AIAgentGroups },
+  components: { SettingsSection, InfoTip, AIReportSchedules, AIAgentGroups, AIRelayKeys },
   props: {
     settings: { type: Object, required: true },
   },
   emits: ["update"],
   setup(props, { emit }) {
+    const $q = useQuasar();
     const apiKeyPlaceholder = "{{HELPDESK_API_KEY}}";
     const providers = ref([]);
 
@@ -1623,6 +1702,58 @@ export default {
       if (!found) return opt && opt.label ? opt.label : String(id);
       return found.client ? `${found.hostname} (${found.client})` : found.hostname;
     }
+    const agentGroupOptions = computed(() =>
+      groups.value.map((g) => {
+        const orch = (g.members || []).find((m) => m.role === "orchestrator" && m.enabled !== false);
+        return {
+          label: `${g.name}${orch ? ` - ${orch.display_name || orch.model_id}` : " (no orchestrator)"}`,
+          value: g.id,
+        };
+      }),
+    );
+    // One row per job, in the order AGENT_SURFACES declares them, with the default on top: a
+    // blank row inherits the row above it, so the first row is what "blank" means everywhere
+    // else. `__default__` is not a surface - it writes ai_preferred_agent_group, which is the
+    // resolver's fallback for any surface without an entry of its own.
+    const routingRows = computed(() => {
+      const preferred = props.settings.ai_preferred_agent_group;
+      const inherit = preferredGroupLabel.value;
+      return [
+        {
+          key: "__default__",
+          label: "Default — every automated job",
+          hint: "Every job below uses this group unless its own row says otherwise. Blank = the starred default model, with no specialists.",
+          value: preferred ?? null,
+          placeholder: "Starred default model (no specialists)",
+        },
+        ...(surfaces.value || []).map((s) => ({
+          key: s.key,
+          label: s.label,
+          hint: s.hint,
+          value: (props.settings.ai_agent_routing || {})[s.key] ?? null,
+          placeholder: inherit,
+        })),
+      ];
+    });
+    // NEVER RENDER A BARE ID. Quasar falls back to printing the raw model value whenever it
+    // cannot match it to an option, which is how a stored group id (2) ends up on screen as "2"
+    // - indistinguishable from a broken setting. Resolving the label here means either the real
+    // name is shown, or a sentence that says what is actually wrong.
+    function agentGroupDisplay(id) {
+      if (id === null || id === undefined || id === "") return "";
+      const found = agentGroupOptions.value.find((o) => o.value === id);
+      if (found) return found.label;
+      return groups.value.length
+        ? `Group #${id} - no longer exists`
+        : `Group #${id} - agent groups have not loaded`;
+    }
+    // "Use default (IT)" - names the group so a blank row is self-explanatory.
+    const preferredGroupLabel = computed(() => {
+      const id = props.settings.ai_preferred_agent_group;
+      const found = agentGroupOptions.value.find((o) => o.value === id);
+      if (!found) return "Use the default";
+      return `Use default (${String(found.label).split(" - ")[0]})`;
+    });
     const operatorModelOptions = computed(() =>
       models.value
         .filter((model) => model.enabled)
@@ -1632,6 +1763,19 @@ export default {
         })),
     );
 
+    // Column sets per screen size. On a laptop the settings pane is roughly half the window, so
+    // the useful columns are the identity and the state; everything else is available on a wide
+    // screen. `$q.screen` is reactive, so resizing swaps them live.
+    const providerVisible = computed(() =>
+      $q.screen.lt.md
+        ? ["name", "api_key_set", "enabled", "actions"]
+        : ["name", "base_url", "api_key_set", "enabled", "actions"],
+    );
+    const modelVisible = computed(() =>
+      $q.screen.lt.xl
+        ? ["display_name", "provider_name", "enabled", "is_default", "actions"]
+        : ["display_name", "provider_name", "model_id", "thinking_level", "auto_summarize_tokens", "enabled", "is_default", "actions"],
+    );
     const providerColumns = [
       { name: "name", label: "Provider", field: "name", align: "left" },
       { name: "base_url", label: "Base URL", field: "base_url", align: "left" },
@@ -1644,21 +1788,72 @@ export default {
       { name: "provider_name", label: "Provider", field: "provider_name", align: "left" },
       { name: "model_id", label: "Model ID", field: "model_id", align: "left" },
       { name: "thinking_level", label: "Thinking", field: "thinking_level", align: "left" },
+      {
+        name: "auto_summarize_tokens",
+        label: "Summarize at",
+        field: "auto_summarize_tokens",
+        align: "right",
+        format: (v) => `${Math.round(Number(v || 100000) / 1000)}k`,
+      },
       { name: "enabled", label: "Enabled", field: "enabled", align: "center" },
       { name: "is_default", label: "Default", field: "is_default", align: "center" },
       { name: "actions", label: "", field: "actions", align: "right" },
     ];
 
-    const providerNameOptions = [
+    // Providers the installed pi supports NATIVELY (from the bridge via /core/ai/native-providers/),
+    // so a provider added by a pi upgrade appears here with no code change (2026-09-27). The
+    // static list is only shown until that answers (or if it cannot).
+    const providerNameOptions = ref([
       { label: "Anthropic", value: "anthropic" },
       { label: "OpenAI", value: "openai" },
       { label: "Google", value: "google" },
       { label: "xAI", value: "xai" },
       { label: "OpenRouter", value: "openrouter" },
-      { label: "Custom (OpenAI-compatible)", value: "custom" },
-    ];
+      { label: "DeepSeek", value: "deepseek" },
+    ]);
+    const nativeProviders = ref([]);
+    const loadingNativeProviders = ref(false);
+    const providerFilter = ref("");
+    async function loadNativeProviders() {
+      if (nativeProviders.value.length) return;
+      loadingNativeProviders.value = true;
+      try {
+        const data = await fetchNativeAIProviders();
+        const rows = (data && data.providers) || [];
+        if (rows.length && data.source === "pi") {
+          nativeProviders.value = rows;
+          providerNameOptions.value = rows.map((p) => ({
+            label: `${p.name} (${p.id})` + (p.api_key ? "" : " - OAuth only, not supported here"),
+            value: p.id,
+            disable: !p.api_key,
+          }));
+        }
+      } catch (e) {
+        /* keep the static list */
+      } finally {
+        loadingNativeProviders.value = false;
+      }
+    }
+    const filteredProviderOptions = computed(() => {
+      const f = providerFilter.value.toLowerCase();
+      return f ? providerNameOptions.value.filter((o) => o.label.toLowerCase().includes(f)) : providerNameOptions.value;
+    });
+    function filterProviderOptions(val, update) {
+      update(() => {
+        providerFilter.value = val || "";
+      });
+    }
+    const selectedNativeProvider = computed(() =>
+      nativeProviders.value.find((p) => p.id === (providerForm.value && providerForm.value.name)),
+    );
+    const providerHint = computed(() => {
+      const p = selectedNativeProvider.value;
+      return p ? `Native pi connector - ${p.model_count} models known` : "";
+    });
 
     const providerOptions = ref([]);
+    const groups = ref([]);
+    const surfaces = ref([]);
 
     // available models (from bridge, for configured keys)
     const availableModels = ref([]);
@@ -1708,6 +1903,40 @@ export default {
       availableFilter.value = "";
     }
 
+    // What the runtime will actually honour for the model being edited. xhigh/max are
+    // absent unless that model's thinkingLevelMap names them — offering them otherwise
+    // is a lie, the bridge clamps them away before the request is sent.
+    const BASE_THINKING = ["off", "minimal", "low", "medium", "high"];
+    function levelsFor(providerName, modelId) {
+      const found = availableModels.value.find(
+        (m) => m.provider === providerName && m.model_id === modelId,
+      );
+      return found?.thinking_levels?.length ? found.thinking_levels : null;
+    }
+    function clampThinking(level, levels) {
+      if (!levels?.length) return level || "medium";
+      if (levels.includes(level)) return level;
+      if (levels.includes("medium")) return "medium";
+      if (levels.includes("high")) return "high";
+      return levels[levels.length - 1];
+    }
+    const thinkingOptions = computed(() => {
+      const pname = providerNameById(modelForm.value.provider);
+      const levels = levelsFor(pname, modelForm.value.model_id);
+      const opts = levels ? [...levels] : [...BASE_THINKING];
+      const cur = modelForm.value.thinking_level;
+      if (cur && !opts.includes(cur)) opts.push(cur);
+      return opts;
+    });
+    const thinkingHint = computed(() => {
+      const pname = providerNameById(modelForm.value.provider);
+      const levels = levelsFor(pname, modelForm.value.model_id);
+      if (!levels) return "Pick a model to see the levels it accepts. xhigh is only offered when the model supports it.";
+      return levels.includes("xhigh")
+        ? "This model accepts xhigh."
+        : "This model does not accept xhigh — it is not offered.";
+    });
+
     function onModelPick(val) {
       const pname = providerNameById(modelForm.value.provider);
       const found = availableModels.value.find(
@@ -1716,6 +1945,10 @@ export default {
       if (found && !modelForm.value.display_name) {
         modelForm.value.display_name = found.display_name;
       }
+      modelForm.value.thinking_level = clampThinking(
+        modelForm.value.thinking_level,
+        found?.thinking_levels,
+      );
     }
 
     async function loadAvailable() {
@@ -1731,9 +1964,31 @@ export default {
     }
 
     async function loadAll() {
-      providers.value = await fetchAIProviders();
-      models.value = await fetchAIModels();
-      providerOptions.value = providers.value.map((p) => ({
+      // EACH CALL STANDS ALONE. This used to be three awaits in a row with only the last one
+      // guarded, so a single failing endpoint (a 403 on models, a 500 on providers) aborted the
+      // whole function and the agent groups were never fetched - which is precisely how a group
+      // row ends up displaying a raw id like "2" instead of the group's name.
+      try {
+        providers.value = await fetchAIProviders();
+      } catch {
+        providers.value = [];
+      }
+      try {
+        models.value = await fetchAIModels();
+      } catch {
+        models.value = [];
+      }
+      try {
+        const g = await fetchAIAgentGroups();
+        groups.value = Array.isArray(g) ? g : (g && g.groups) || [];
+        // The headless rules the API will accept a group for. Served from
+        // AGENT_SURFACES, so the UI can never offer a surface the resolver doesn't know.
+        surfaces.value = Array.isArray(g) ? [] : (g && g.surfaces) || [];
+      } catch {
+        groups.value = [];
+        surfaces.value = [];
+      }
+      providerOptions.value = (providers.value || []).map((p) => ({
         label: p.name,
         value: p.id,
       }));
@@ -1742,6 +1997,21 @@ export default {
 
     function update(key, val) {
       emit("update", { key, val });
+    }
+
+    // The top row is not a surface: it IS the preferred group, so it writes that column rather
+    // than an ai_agent_routing entry. A cleared row means "inherit", so it is REMOVED from the
+    // object instead of stored as null - the serializer drops empty values too, and the resolver
+    // treats a missing key exactly like an unset one.
+    function setRouting(key, val) {
+      if (key === "__default__") {
+        update("ai_preferred_agent_group", val === "" ? null : val);
+        return;
+      }
+      const next = { ...(props.settings.ai_agent_routing || {}) };
+      if (val === null || val === undefined || val === "") delete next[key];
+      else next[key] = val;
+      update("ai_agent_routing", next);
     }
 
     // ---- Friendly ticket-scope controls (read/write the ai_ticket_scope JSON) ----
@@ -1795,10 +2065,12 @@ export default {
     function addProvider() {
       providerForm.value = { name: "anthropic", api_key: "", base_url: "", enabled: true };
       providerDialog.value = true;
+      loadNativeProviders();
     }
     function editProvider(row) {
       providerForm.value = { id: row.id, name: row.name, api_key: "", base_url: row.base_url, enabled: row.enabled };
       providerDialog.value = true;
+      loadNativeProviders();
     }
     async function saveProviderForm() {
       try {
@@ -1812,13 +2084,21 @@ export default {
         notifyError(e?.response?.data || "Failed to save provider");
       }
     }
-    async function removeProvider(row) {
-      try {
-        await deleteAIProvider(row.id);
-        await loadAll();
-      } catch (e) {
-        notifyError("Failed to delete provider");
-      }
+    function removeProvider(row) {
+      $q.dialog({
+        title: "Delete provider?",
+        message: `Delete ${row.name}? Its API key and every model attached to it will be removed. This cannot be undone.`,
+        cancel: true,
+        persistent: true,
+        ok: { label: "Delete", color: "negative" },
+      }).onOk(async () => {
+        try {
+          await deleteAIProvider(row.id);
+          await loadAll();
+        } catch (e) {
+          notifyError("Failed to delete provider");
+        }
+      });
     }
 
     // model dialog
@@ -1833,16 +2113,23 @@ export default {
         thinking_level: "medium",
         enabled: true,
         is_default: false,
+        auto_summarize_k: 100,
       };
       modelDialog.value = true;
     }
     function editModel(row) {
-      modelForm.value = { ...row };
+      modelForm.value = { ...row, auto_summarize_k: Math.round(Number(row.auto_summarize_tokens || 100000) / 1000) };
       modelDialog.value = true;
     }
     async function saveModelForm() {
       try {
-        const f = modelForm.value;
+        const { auto_summarize_k, ...rest } = modelForm.value;
+        const k = Math.round(Number(auto_summarize_k ?? 100));
+        if (!Number.isFinite(k) || k < 20 || k > 1000) {
+          notifyError("Auto-summarize must be between 20k and 1000k tokens");
+          return;
+        }
+        const f = { ...rest, auto_summarize_tokens: k * 1000 };
         if (f.id) await editAIModel(f.id, f);
         else await saveAIModel(f);
         notifySuccess("Model saved");
@@ -1852,13 +2139,21 @@ export default {
         notifyError(e?.response?.data || "Failed to save model");
       }
     }
-    async function removeModel(row) {
-      try {
-        await deleteAIModel(row.id);
-        await loadAll();
-      } catch (e) {
-        notifyError("Failed to delete model");
-      }
+    function removeModel(row) {
+      $q.dialog({
+        title: "Delete model?",
+        message: `Delete ${row.display_name || row.model_id}? Chats using it will fall back to the default model.`,
+        cancel: true,
+        persistent: true,
+        ok: { label: "Delete", color: "negative" },
+      }).onOk(async () => {
+        try {
+          await deleteAIModel(row.id);
+          await loadAll();
+        } catch (e) {
+          notifyError("Failed to delete model");
+        }
+      });
     }
 
     onMounted(loadAll);
@@ -1903,11 +2198,23 @@ export default {
       models,
       operatorAgentOptions,
       operatorModelOptions,
+      agentGroupOptions,
+      surfaces,
+      routingRows,
+      preferredGroupLabel,
+      setRouting, agentGroupDisplay,
       filterOperatorAgents,
       operatorAgentLabel,
       providerColumns,
       modelColumns,
       providerNameOptions,
+      providerVisible,
+      modelVisible,
+      filteredProviderOptions,
+      filterProviderOptions,
+      loadingNativeProviders,
+      selectedNativeProvider,
+      providerHint,
       providerOptions,
       availableForProvider,
       providerHasModels,
@@ -1917,6 +2224,8 @@ export default {
       filterAvailable,
       onProviderChange,
       onModelPick,
+      thinkingOptions,
+      thinkingHint,
       update,
       scopeBool,
       setScopeBool,
@@ -1940,3 +2249,24 @@ export default {
   },
 };
 </script>
+
+<style scoped>
+/* Never scroll sideways (owner's rule). Each row is a label plus a select that may shrink;
+   under ~560px they stack rather than pushing the dialog wide. min-width:0 on both is what
+   actually prevents the overflow - flex items default to min-width:auto. */
+.routing-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.routing-label {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.routing-select {
+  flex: 0 1 320px;
+  min-width: 160px;
+}
+</style>

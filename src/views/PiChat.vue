@@ -60,6 +60,23 @@
                 />
               </q-item-section>
             </q-item>
+            <q-item v-if="isDecision && autototpAllowed" tag="label" dense>
+              <q-item-section>
+                <q-item-label>Auto-TOTP</q-item-label>
+                <q-item-label caption>
+                  Save new TOTP authenticators and use live codes to sign in without asking.
+                  The judge still reviews every save.
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle
+                  v-model="autoTotp"
+                  dense
+                  color="deep-purple"
+                  @update:model-value="sendAutoTotp"
+                />
+              </q-item-section>
+            </q-item>
             <q-item v-if="isDecision" tag="label" dense>
               <q-item-section>
                 <q-item-label>Allow customer email</q-item-label>
@@ -133,6 +150,51 @@
 
             <q-separator dark class="q-my-sm" />
             <q-item-label header class="text-grey-5">History &amp; cost</q-item-label>
+            <q-item tag="label" dense data-test="pi-auto-summarize">
+              <q-item-section avatar><q-icon name="auto_mode" /></q-item-section>
+              <q-item-section>
+                <q-item-label>Auto-summarize</q-item-label>
+                <q-item-label caption>
+                  When this window is past the limit, it summarizes before the next task starts
+                  (a finished ticket is never summarized).
+                  <span v-if="summarizeInherited">Using the agent group's / model's setting ({{ summarizeInheritedK }}k).</span>
+                  <span v-else>
+                    This window's own setting.
+                    <a href="#" class="text-green-4" @click.prevent.stop="resetAutoSummarizeTokens">Use the group default ({{ summarizeInheritedK }}k)</a>
+                  </span>
+                  Changing it here changes this window only.
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-toggle
+                  v-model="autoSummarize"
+                  dense
+                  color="green"
+                  @update:model-value="sendAutoSummarize"
+                />
+              </q-item-section>
+            </q-item>
+            <q-item dense>
+              <q-item-section avatar />
+              <q-item-section>
+                <q-input
+                  v-model.number="autoSummarizeK"
+                  type="number"
+                  dense
+                  dark
+                  outlined
+                  :min="20"
+                  :max="1000"
+                  :disable="!autoSummarize"
+                  suffix="k tokens"
+                  label="Summarize at"
+                  data-test="pi-auto-summarize-tokens"
+                  @keydown.enter.prevent="sendAutoSummarizeTokens"
+                  @blur="sendAutoSummarizeTokens"
+                  @click.stop
+                />
+              </q-item-section>
+            </q-item>
             <q-item
               clickable
               v-close-popup
@@ -264,6 +326,20 @@
             &middot; <b>{{ fmtMoney(costPerTurn) }}/turn</b>
           </div>
           <div>Last turn: {{ fmtMoney(lastTurnCost) }}</div>
+          <!-- DESKTOP WORK. Driving the Operator desktop has no separate line on a provider
+               bill: its cost IS the turns it consumed (every desktop action is a model call
+               that re-reads the whole conversation, and a flaky one retries). So it is shown
+               as a subset of the total, not as an extra charge. -->
+          <div v-if="costDesktop && costDesktop.calls" class="q-mt-xs">
+            <q-icon name="desktop_windows" size="14px" />
+            Desktop actions: <b>{{ costDesktop.calls }}</b>
+            &middot; {{ fmtMoney(costDesktop.cost) }}
+            <div class="text-grey-4" style="font-size: 11px">
+              {{ costDesktop.turns }} turn{{ costDesktop.turns === 1 ? "" : "s" }} driving the screen.
+              A desktop action costs nothing by itself — it costs the conversation turn that
+              requests it, and every later turn re-reads the result.
+            </div>
+          </div>
 
           <!-- The meter above is THIS conversation only: a new chat starts at $0.00 even
                on a device that has spent hundreds. The lifetime figure is what billing
@@ -284,6 +360,13 @@
             <div>Input: {{ fmtMoney(costSpend.input) }}</div>
           </template>
 
+          <template v-if="costByRole.length">
+            <div class="text-weight-bold q-mt-sm">By role (since this window opened)</div>
+            <div v-for="br in costByRole" :key="br.role + br.model">
+              {{ br.role }} &middot; {{ String(br.model).split("/").pop() }} &middot;
+              {{ br.turns }} turn{{ br.turns === 1 ? "" : "s" }} &middot; {{ fmtMoney(br.cost) }}
+            </div>
+          </template>
           <template v-if="costByModel.length > 1">
             <div class="text-weight-bold q-mt-sm">By model</div>
             <div v-for="bm in costByModel" :key="bm.model">
@@ -420,11 +503,93 @@
       <span v-if="presence.viewers && presence.viewers.length > 1" class="text-grey-5">
         &middot; {{ presence.viewers.length }} watching
       </span>
+      <template #action>
+        <q-btn dense flat no-caps size="sm" icon="group" label="Access" @click="accessDialog = true" />
+      </template>
     </q-banner>
     <q-banner v-else-if="presence && presence.viewers && presence.viewers.length > 1" dense class="bg-grey-9 text-grey-4 q-px-md">
       <template #avatar><q-icon name="groups" color="light-green-6" /></template>
       You are driving &middot; {{ presence.viewers.length - 1 }} other{{ presence.viewers.length > 2 ? 's' : '' }} watching read-only.
+      <span v-if="grantCount" class="text-amber-6">&middot; {{ grantCount }} waiting for the seat</span>
+      <template #action>
+        <q-btn dense flat no-caps size="sm" icon="group" :label="`Access (${roster.people.length})`" @click="accessDialog = true" />
+      </template>
     </q-banner>
+    <!-- WHAT THIS AUTOMATION IS ABOUT TO DO, BEFORE IT DOES IT.
+
+         Owner's shape (2026-09-28): "when the tech get's take to the area where it works on things...
+         it will be told what its about to do first... that way the tech can review before you say
+         go." The plan is the subject's RULE read out for THIS ticket, with the machine and script
+         names filled in - not prose a model wrote - so what the technician approves is exactly what
+         would run. Approving the rule alone would be a blank cheque; this is the cheque. -->
+    <q-card v-if="isDecision && approval && approval.state !== 'none'" flat bordered class="automation-card q-mx-md q-mt-sm">
+      <q-card-section class="q-py-sm">
+        <div class="row items-center">
+          <q-icon name="smart_toy" size="18px" class="q-mr-sm" />
+          <div class="text-subtitle2">
+            {{ approval.state === 'awaiting_review' ? 'This automation wants to work this ticket'
+               : approval.state === 'approved' ? 'Approved to work this ticket'
+               : approval.state === 'declined' ? 'Declined' : `Automation approval: ${approval.state}` }}
+          </div>
+          <q-space />
+          <div v-if="approval.subject && approval.subject.name" class="text-caption text-grey-7">
+            subject: {{ approval.subject.name }}
+          </div>
+        </div>
+
+        <div v-if="approval.state === 'awaiting_review' || approval.state === 'approved'" class="q-mt-sm">
+          <div class="text-caption text-grey-7">On this ticket it would:</div>
+          <div class="plan-list">
+            <div v-for="(s, i) in approval.plan && approval.plan.steps || []" :key="`st${i}`"
+                 class="plan-step" :class="{ 'plan-step--mutates': s.mutating }"
+                 :style="{ marginLeft: `${(s.depth || 0) * 14}px` }">
+              <span class="plan-step-text">{{ s.step }}</span>
+              <span v-if="s.detail" class="text-grey-7"> · {{ s.detail }}</span>
+              <span v-if="s.needs_ai" class="text-amber-8"> · the AI decides this</span>
+              <q-badge v-if="s.mutating" dense color="orange-9" label="changes something" class="q-ml-xs" />
+            </div>
+          </div>
+          <div v-if="approval.plan && approval.plan.host" class="text-caption text-grey-7 q-mt-xs">
+            Machine: {{ approval.plan.host }}
+          </div>
+
+          <div v-if="approval.state === 'approved'" class="plan-approved q-mt-sm">
+            Approved by {{ approval.approved_by || 'someone' }}
+            ({{ approval.approver_capacity === 'support_contact' ? 'support contact' : 'technician' }})
+            <span v-if="approval.approved_at"> at {{ whenAgo(approval.approved_at) }}</span>.
+            <span v-if="approval.expires_at"> Valid until {{ whenAgo(approval.expires_at) }} from now.</span>
+            The AI works below - watch the commands and their output run live.
+          </div>
+
+          <div v-if="!approval.rule_still_matches" class="plan-warn q-mt-sm">
+            The rule has been edited since this plan was written, so the approval no longer applies.
+            Ask for a new plan before letting it run.
+          </div>
+
+          <div class="row items-center q-gutter-sm q-mt-sm">
+            <q-btn v-if="approval.state === 'awaiting_review'" dense unelevated no-caps color="teal-8"
+                   icon="play_arrow" label="Go - approve this plan" :loading="approvalBusy"
+                   @click="decideApproval('approve')" />
+            <q-btn v-if="approval.state === 'awaiting_review'" dense flat no-caps color="negative"
+                   label="Decline" :disable="approvalBusy" @click="decideApproval('decline')" />
+            <q-btn v-if="approval.state === 'approved'" dense flat no-caps color="grey-6"
+                   label="Withdraw the approval" :disable="approvalBusy" @click="decideApproval('decline')" />
+            <q-btn dense flat no-caps size="sm" color="grey-6" label="re-read" :loading="approvalBusy"
+                   @click="loadApproval()" />
+          </div>
+        </div>
+
+        <div v-else class="text-caption text-grey-7 q-mt-sm">
+          {{ approval.declined_by ? `Declined by ${approval.declined_by}. ` : '' }}
+          {{ approval.decline_reason || 'The automation will not act on this ticket until a new plan is approved.' }}
+          <q-btn dense flat no-caps size="sm" color="primary" label="ask for a new plan"
+                 :loading="approvalBusy" @click="requestApprovalPlan" />
+        </div>
+
+        <div v-if="approvalError" class="text-caption text-negative q-mt-sm">{{ approvalError }}</div>
+      </q-card-section>
+    </q-card>
+
     <q-banner v-if="takeoverAsk" dense class="bg-amber-9 text-black q-px-md">
       <template #avatar><q-icon name="sports_esports" /></template>
       <b>{{ takeoverAsk.from.display }}</b> is asking to take over this session. No answer in {{ takeoverAsk.timeout_s }}s means no.
@@ -433,6 +598,142 @@
         <q-btn flat dense no-caps label="Keep it" @click="answerTakeover(false)" />
       </template>
     </q-banner>
+    <!-- ACCESS. Who holds the seat, who is watching, and everyone who has had access to this
+         session - so the driver can hand control BACK to someone they took it from (a demoted
+         user otherwise has no route back: taking over needs can_take_over_ai_session, and an
+         admin driver's seat needs their consent). -->
+    <q-dialog v-model="accessDialog">
+      <q-card style="min-width: 460px; max-width: 620px">
+        <q-card-section class="text-subtitle1">Who has access to this session</q-card-section>
+        <q-card-section class="q-pt-none q-gutter-sm">
+          <div v-if="!roster.people.length" class="text-grey">Nobody has joined this session yet.</div>
+          <q-list dense bordered separator>
+            <q-item v-for="p in roster.people" :key="p.username">
+              <q-item-section avatar>
+                <q-icon :name="p.driving ? 'sports_esports' : p.connected ? 'visibility' : 'history'"
+                        :color="p.driving ? 'amber-8' : p.connected ? 'light-green-6' : 'grey-6'" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>
+                  <b>{{ p.display }}</b>
+                  <span v-if="p.username === myUsername" class="text-grey-6"> (you)</span>
+                </q-item-label>
+                <q-item-label caption>
+                  {{ p.driving ? "driving now" : p.connected ? "watching read-only" : "not connected" }}
+                  <span v-if="p.drives"> &middot; has driven {{ p.drives }}&times;</span>
+                  <span v-if="!p.connected && p.last_seen"> &middot; last seen {{ whenAgo(p.last_seen) }}</span>
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-btn v-if="isDriver && !p.driving" dense flat no-caps size="sm" color="primary"
+                       icon="sports_esports" label="Give control" :loading="grantPending === p.username"
+                       @click="giveControl(p.username)">
+                  <q-tooltip>Hand the seat to {{ p.display }}. They drive at once if connected, otherwise the moment they return.</q-tooltip>
+                </q-btn>
+              </q-item-section>
+            </q-item>
+          </q-list>
+          <div v-if="roster.grants && roster.grants.length">
+            <div class="text-caption text-amber-8 q-mb-xs">Waiting to drive (seat granted, not used yet)</div>
+            <q-list dense bordered separator>
+              <q-item v-for="g in roster.grants" :key="g.username">
+                <q-item-section avatar><q-icon name="pending" color="amber-8" /></q-item-section>
+                <q-item-section>
+                  <q-item-label><b>{{ g.display }}</b></q-item-label>
+                  <q-item-label caption>given by {{ g.by }}{{ g.connected ? " - connected, will take the seat" : " - when they next connect" }}</q-item-label>
+                </q-item-section>
+                <q-item-section side>
+                  <q-btn v-if="isDriver" dense flat no-caps size="sm" color="negative" label="Undo" @click="cancelGrant(g.username)" />
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </div>
+          <div class="text-caption text-grey-7">
+            Giving control does not change anyone's RMM permissions - it only moves the seat of
+            this live session. The person keeps watching read-only until you hand it over.
+          </div>
+
+          <!-- CAPABILITIES FOR THIS SESSION. The technician who needs the switch is right here
+               in the roster, so turning it on belongs here - not in Global Settings, and not in
+               their own hamburger (which only lists switches their role already allows). The
+               server writes `can_grant_caps` into the session, and refuses anyone else anyway. -->
+          <template v-if="canGrantCaps && capScopeRef">
+            <q-separator class="q-my-sm" />
+            <div class="text-caption text-amber-8 q-mb-xs">Capabilities in this session</div>
+            <div class="text-caption text-grey-7 q-mb-sm">
+              Adds a switch for one technician <b>on top of their role</b>, for this
+              {{ isDecision ? "ticket" : "device" }} only. Their role is untouched, and the
+              exception lapses on its own.
+            </div>
+            <div class="row q-col-gutter-sm q-mb-sm">
+              <q-select
+                class="col-12 col-sm-6"
+                dense
+                outlined
+                v-model="capUsername"
+                :options="capPeopleOptions"
+                emit-value
+                map-options
+                label="Technician"
+                :hint="capPeopleHint"
+              />
+              <q-select
+                class="col-12 col-sm-6"
+                dense
+                outlined
+                v-model="capMinutes"
+                :options="capDurations"
+                emit-value
+                map-options
+                label="For how long"
+              />
+            </div>
+            <div class="q-mb-sm">
+              <div v-for="c in capCatalog" :key="c.id" class="row items-start no-wrap">
+                <q-checkbox dense v-model="capPicked" :val="c.id" class="q-mr-xs q-mt-xs" />
+                <div class="cap-opt">
+                  <div class="text-body2">{{ c.label }}</div>
+                  <div class="text-caption text-grey-7">{{ c.hint }}</div>
+                  <div v-if="capExisting.includes(c.id)" class="text-caption text-teal-8">
+                    already granted in this scope - granting again only extends it
+                  </div>
+                  <div v-else-if="capRoleAllowed[c.id]" class="text-caption text-grey-6">
+                    their role already allows this
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="row items-center q-gutter-sm">
+              <q-btn
+                dense
+                unelevated
+                no-caps
+                color="primary"
+                label="Grant and switch on"
+                :loading="capSaving"
+                :disable="!capPicked.length || !capUsername"
+                @click="grantCapabilities"
+              />
+              <q-btn
+                v-if="capExisting.length"
+                dense
+                flat
+                no-caps
+                color="negative"
+                label="Withdraw all"
+                :loading="capSaving"
+                @click="withdrawCapabilities"
+              />
+              <span v-if="capMessage" class="text-caption text-grey-7">{{ capMessage }}</span>
+            </div>
+          </template>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps label="Close" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- SCROLL PAUSE. `@scroll` decides, on every scroll, whether this transcript is
          still "at the bottom" (within 1% of the scrollable height). While it is not,
          nothing auto-scrolls: what you are reading, selecting or copying stays exactly
@@ -452,6 +753,9 @@
                  sent it. -->
             <div v-if="msg.via" class="text-caption text-grey-5 text-right q-mb-xs">
               <q-icon name="person" size="14px" /> {{ msg.via }}
+            </div>
+            <div v-else-if="msg.steered" class="text-caption text-grey-5 text-right q-mb-xs">
+              <q-icon name="alt_route" size="14px" /> steered into the running turn
             </div>
             <div v-else-if="msg.queued" class="text-caption text-grey-5 text-right q-mb-xs">
               <q-icon name="playlist_play" size="14px" /> {{ msg.queuedReply ? "answered in the queue" : "from the queue" }}
@@ -494,7 +798,12 @@
                   size="xs"
                   class="q-mr-xs"
                 />
-                <span class="text-weight-medium">{{ tool.name }}</span>
+                <!-- A readable title, not the raw tool id: "Running a command on the device:
+                     docker ps", with the raw name kept in the tooltip for diagnosis. -->
+                <span class="text-weight-medium" :title="tool.name">{{ tool.label || tool.name }}</span>
+                <span v-if="tool.detail" class="text-caption text-grey-5 q-ml-sm pi-tool-detail">
+                  {{ tool.detail }}
+                </span>
               </div>
               <pre v-if="tool.args" class="pi-args">{{ tool.args }}</pre>
               <pre v-if="tool.result" class="pi-result">{{ tool.result }}</pre>
@@ -502,6 +811,10 @@
           </div>
         </div>
         <!-- system/info -->
+        <!-- What this run cost: under the answer it paid for, left-aligned with it. -->
+        <div v-else-if="msg.cost" class="row justify-start" data-test="pi-run-cost">
+          <div class="text-caption text-green-4 pi-text pi-run-cost">{{ msg.text }}</div>
+        </div>
         <div v-else class="row justify-center">
           <div class="text-caption text-grey-5 pi-text">{{ msg.text }}</div>
         </div>
@@ -509,16 +822,13 @@
       <!-- Compacting indicator in the transcript flow, where eyes already are. Separate
            from the streaming row because compaction is not a turn - no stall watchdog,
            no Stop button, just an honest "this is running". -->
-      <div v-if="compacting && !streaming" class="row items-center q-gutter-xs q-mt-xs">
-        <q-spinner-hourglass color="amber" />
-        <span class="text-caption text-amber-4">
-          Summarizing the conversation&hellip; this is an AI call and can take a minute or
-          two on a long chat. The result will appear here when it is done.
-        </span>
-      </div>
       <div v-if="streaming" class="row items-center q-gutter-xs q-mt-xs">
         <q-spinner-dots color="primary" />
-        <span class="text-caption" :class="stalled ? 'text-orange' : 'text-grey-5'">
+        <span
+          class="text-caption pi-working"
+          :class="stalled ? 'text-orange' : 'text-grey-4'"
+          data-test="pi-working-on"
+        >
           {{ workingText }}
         </span>
         <q-btn
@@ -696,19 +1006,28 @@
       </span>
       Pi wants to run: <strong>{{ pendingApproval.summary }}</strong>
       <template #action>
-        <q-btn
-          v-if="approvalQueue.length > 1"
-          flat
-          label="Approve all"
-          @click="respondApprovalAll(true)"
-        />
-        <q-btn flat label="Deny" @click="respondApproval(false)" />
-        <q-btn
-          flat
-          color="white"
-          label="Approve"
-          @click="respondApproval(true)"
-        />
+        <!-- WHO ANSWERS: only the technician driving the session. The bridge enforces this, so
+             showing a viewer buttons they cannot use would just produce a refusal; they get the
+             reason instead. An admin who wants to approve presses Take over first. -->
+        <template v-if="isDriver">
+          <q-btn
+            v-if="approvalQueue.length > 1"
+            flat
+            label="Approve all"
+            @click="respondApprovalAll(true)"
+          />
+          <q-btn flat label="Deny" @click="respondApproval(false)" />
+          <q-btn
+            flat
+            color="white"
+            label="Approve"
+            @click="respondApproval(true)"
+          />
+        </template>
+        <span v-else class="text-white">
+          <b>{{ presence && presence.owner ? presence.owner.display : "The driver" }}</b> must answer this.
+          Press <b>Take over</b> to decide it yourself.
+        </span>
       </template>
     </q-banner>
 
@@ -894,7 +1213,7 @@
     <aside
       v-if="queueOpen"
       class="pi-queue bg-grey-9"
-      :class="{ 'pi-queue--overlay': queueOverlay, 'pi-queue--resizing': queueResizing }"
+      :class="{ 'pi-queue--overlay': queueOverlay, 'pi-queue--resizing': queueResizing, 'pi-queue--live': compacting }"
       :style="{ width: queueWidth + 'px', flexBasis: queueWidth + 'px' }"
       data-test="pi-queue-panel"
     >
@@ -949,6 +1268,11 @@
         <q-btn flat round dense icon="close" @click="queueClose" />
       </div>
 
+      <!-- EVERYTHING BELOW THE HEADER SCROLLS (owner, 2026-09-30: "no scroll... I can't use the
+           queue"). The status strips, the prompt box and the buttons used to be fixed-height parts
+           of a fixed-height column, so on a short window they ate all the height, the list got
+           0px and nothing could be reached. The list keeps a floor and this body scrolls. -->
+      <div class="pi-queue-body" data-test="pi-queue-body">
       <!-- switches: one row, short labels; the detail is in tooltips -->
       <div class="row items-center no-wrap q-px-sm q-pt-xs pi-queue-switches">
         <q-toggle
@@ -996,13 +1320,28 @@
         </div>
         <div v-for="q in queueQuestions" :key="q.id" class="pi-queue-question q-pa-sm q-mb-xs" data-test="pi-queue-question">
           <div class="row items-start no-wrap">
-            <div class="col pi-text text-body2" style="min-width: 0">{{ q.text }}</div>
+            <div class="col pi-text text-body2" style="min-width: 0">
+              <div
+                class="pi-clamp"
+                :class="{ 'pi-clamp--open': queueTextOpen['q' + q.id] }"
+                :title="queueTextOpen['q' + q.id] ? 'Click to collapse' : 'Click to show the whole question'"
+                @click="queueTextToggle('q' + q.id)"
+              >{{ q.text }}</div>
+            </div>
             <q-btn flat round dense size="sm" icon="close" class="q-ml-xs" @click="queueDismissQuestion(q)">
               <q-tooltip>Dismiss without answering</q-tooltip>
             </q-btn>
           </div>
-          <div v-if="q.item_id && queueItemText(q.item_id)" class="text-caption text-grey-5 q-mt-xs">
-            <q-icon name="subdirectory_arrow_right" size="12px" /> about: {{ queueItemText(q.item_id) }}
+          <div
+            v-if="queueItemText(q.item_id) || (queueRunningItem && queueRunningItem.text)"
+            class="text-caption text-grey-5 q-mt-xs pi-clamp"
+            style="--pi-clamp-lines: 2"
+            :class="{ 'pi-clamp--open': queueTextOpen['about' + q.id] }"
+            :title="queueTextOpen['about' + q.id] ? 'Click to collapse' : 'Click to show the whole prompt'"
+            @click="queueTextToggle('about' + q.id)"
+          >
+            <q-icon name="subdirectory_arrow_right" size="12px" />
+            about: {{ queueItemText(q.item_id) || queueRunningItem.text }}
           </div>
           <div class="row items-end no-wrap q-mt-sm">
             <q-input
@@ -1040,13 +1379,59 @@
           <q-icon name="pause_circle" color="orange-4" size="20px" class="q-mr-sm" />
           <div class="col" style="min-width: 0">
             <div class="text-subtitle2 text-orange-3">Paused</div>
-            <div class="pi-text text-body2">{{ queuePaused.reason }}</div>
+            <div
+              class="pi-text text-body2 pi-clamp"
+              style="--pi-clamp-lines: 4"
+              :class="{ 'pi-clamp--open': queueTextOpen['paused'] }"
+              :title="queueTextOpen['paused'] ? 'Click to collapse' : 'Click to show the whole reason'"
+              @click="queueTextToggle('paused')"
+            >{{ queuePaused.reason }}</div>
+            <!-- Waiting for an answer does NOT mean the queue is empty: name the prompt the
+                 pause landed on, in the same strip, so nobody has to guess or scroll the list.
+                 "paused during" is exact - the item stays `running` while it waits (queue.js
+                 pause() does not clear it), but the model has stopped to ask, so it is not
+                 still being worked on. -->
+            <div
+              v-if="queueRunningItem"
+              class="text-caption text-green-4 q-mt-xs pi-text pi-clamp"
+              style="--pi-clamp-lines: 3"
+              :class="{ 'pi-clamp--open': queueTextOpen['pausedDuring'] }"
+              data-test="pi-queue-still-running"
+              :title="queueTextOpen['pausedDuring'] ? 'Click to collapse' : 'Click to show the whole prompt'"
+              @click="queueTextToggle('pausedDuring')"
+            >
+              <q-icon name="subdirectory_arrow_right" size="12px" class="q-mr-xs" />
+              paused during: {{ promptWords(queueRunningItem.text) }}
+            </div>
           </div>
           <q-btn dense no-caps outline color="orange-4" icon="play_arrow" label="Resume" class="q-ml-sm" @click="queueResume" />
         </div>
       </div>
-      <div v-else-if="queueRunningId" class="pi-queue-status text-green-4 q-mx-sm q-mt-xs">
-        <q-spinner-dots size="16px" class="q-mr-sm" /> Running a queued prompt
+      <!-- NAME WHAT IS BEING WORKED ON, whichever way it arrived (owner, 2026-09-27). "Running a
+           queued prompt" said that something was running without saying what, and a prompt typed
+           in the chat is not a queue item at all, so nothing was shown for it. -->
+      <!-- The WHOLE prompt, not one ellipsized line (owner, 2026-09-30: "full summary of what it
+           is working on"). Starts at 6 lines, click for all of it; the box scrolls past 40vh. -->
+      <div
+        v-else-if="queueRunningItem || queueWorkingOn"
+        class="pi-queue-working q-mx-sm q-mt-xs q-pa-sm"
+        data-test="pi-queue-working-on"
+      >
+        <div class="row items-center no-wrap text-green-4 text-subtitle2">
+          <q-spinner-dots size="16px" class="q-mr-sm" />
+          Working on
+          <q-space />
+          <span class="text-caption text-grey-5 cursor-pointer" @click="queueTextToggle('working')">
+            {{ queueTextOpen['working'] ? "show less" : "show all" }}
+          </span>
+        </div>
+        <div
+          class="pi-text text-body2 text-green-2 pi-clamp q-mt-xs"
+          style="--pi-clamp-lines: 6"
+          :class="{ 'pi-clamp--open': queueTextOpen['working'] }"
+          :title="queueTextOpen['working'] ? 'Click to collapse' : 'Click to show the whole prompt'"
+          @click="queueTextToggle('working')"
+        >{{ promptWords((queueRunningItem && queueRunningItem.text) || (queueWorkingOn && queueWorkingOn.text) || "") }}</div>
       </div>
       <div v-else-if="queueAuto && queuePending" class="pi-queue-status text-green-4 q-mx-sm q-mt-xs">
         <q-icon name="bolt" size="16px" class="q-mr-sm" /> Next prompt goes when the assistant is free
@@ -1064,6 +1449,7 @@
             outlined
             class="col"
             placeholder="Next prompt&hellip;  (Enter adds, Shift+Enter for a new line)"
+            :input-style="{ maxHeight: '30vh' }"
             :disable="!connected"
             data-test="pi-queue-new"
             @keydown.enter.exact.prevent="queueAdd"
@@ -1319,6 +1705,7 @@
           </div>
         </div>
       </div>
+      </div><!-- /pi-queue-body -->
       <!-- HISTORY - the human's record of what this queue did. Newest first. It lives in
            the queue file and in queue_state frames only; the model never sees it. -->
       <q-dialog v-model="queueHistoryOpen">
@@ -1420,6 +1807,70 @@
       </q-dialog>
     </aside>
     </div><!-- /pi-body -->
+    <!-- Summarizing: a blocking overlay in the middle of the window. Compaction rewrites
+         what the AI works from, so nothing may be sent or switched until it is done. -->
+    <div
+      v-if="compacting"
+      class="pi-compact-overlay"
+      data-test="pi-compact-overlay"
+      role="alertdialog"
+      aria-modal="true"
+      aria-live="assertive"
+      @click.stop.prevent
+      @keydown.stop.prevent
+    >
+      <div class="pi-compact-card column items-center text-center">
+        <q-spinner-hourglass color="amber" size="72px" />
+        <div class="text-h6 q-mt-md">
+          {{ compactInfo.clear ? "Summarizing and clearing this conversation" : "Summarizing this conversation" }}
+        </div>
+        <div v-if="compactInfo.auto" class="text-body2 text-grey-4 q-mt-sm">
+          Automatic: this window is past its {{ autoSummarizeK }}k-token limit, so it is summarized
+          before your next task runs. Your prompt runs as soon as this is done.
+        </div>
+        <div class="text-body2 text-grey-4 q-mt-sm">
+          Shrinking about {{ fmtTokens(compactInfo.tokens || contextTokens) }} tokens of history into a
+          summary the AI will work from.
+        </div>
+        <div class="text-body2 text-amber-3 q-mt-sm">
+          <template v-if="queueOpen">You can keep adding to the queue on the right - nothing runs until the summary is done.</template>
+          <template v-else>
+            You can still queue prompts:
+            <a href="#" class="text-amber-3" @click.prevent.stop="queueOpen = true">open the queue</a>
+            - nothing runs until the summary is done.
+          </template>
+          {{ compactInfo.clear ? "The window will show only the summary." : "Everything above stays readable." }}
+        </div>
+        <div class="text-subtitle2 text-amber-4 q-mt-md">
+          Please wait. You can't send messages or change anything in this window until this
+          finishes.
+        </div>
+        <div class="text-caption text-grey-5 q-mt-sm">
+          {{ compactElapsed }} elapsed &middot; usually under a minute or two on a long chat
+        </div>
+        <!-- CANCEL (owner, 2026-09-30): a summary stuck on a slow model locked this window with
+             no way out. Stopping it changes nothing - the harness only writes the summary back
+             when it completes - and the bridge also stops it by itself after 5 minutes. -->
+        <q-btn
+          class="q-mt-md"
+          outline
+          no-caps
+          color="amber-4"
+          icon="close"
+          label="Cancel summary"
+          :loading="compactCancelling"
+          :disable="!connected"
+          data-test="pi-compact-cancel"
+          @click.stop="cancelCompact"
+        >
+          <q-tooltip max-width="320px">
+            Stop summarizing. Nothing is lost: the conversation stays exactly as it was, and
+            your next message runs with the full history.
+          </q-tooltip>
+        </q-btn>
+        <div class="text-caption text-grey-6 q-mt-xs">It also stops by itself after 5 minutes.</div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1437,11 +1888,12 @@ import {
   decodePiMachines,
   encodePiMachines,
 } from "@/api/agents";
-import { fetchAITaskRunLive, createDecisionSession } from "@/api/core";
+import { fetchAITaskRunLive, createDecisionSession, fetchSessionCaps, grantSessionCaps, revokeSessionCaps, fetchAutomationApproval, automationApproval } from "@/api/core";
 import { useAgentDropdown } from "@/composables/agents";
 import { useAICompletionAlerts } from "@/composables/aiCompletionAlerts";
 import { useQRCode } from "@vueuse/integrations/useQRCode";
 import { notifyError, notifySuccess } from "@/utils/notify";
+import { fetchUsers } from "@/api/accounts.js";
 import TacticalDropdown from "@/components/ui/TacticalDropdown.vue";
 
 export default {
@@ -1456,6 +1908,18 @@ export default {
     const isDecision = !!decisionToken;
     const agentId = route.params.agent_id;
     const isMulti = agentId === "multi";
+    // ONE WINDOW = ONE TICKET (2026-09-30). The token/agent above are read once, at setup -
+    // but Vue Router REUSES this component when only the param changes (/ai-decision/A ->
+    // /ai-decision/B from the inbox, a notification, back/forward). The URL then named one
+    // ticket while the socket, transcript and composer still belonged to the other, and a
+    // prompt typed "into" ticket B ran on ticket A (TICKET/61934 got a local-LLM request
+    // meant elsewhere). A different target is a different chat: load it fresh.
+    watch(
+      () => [route.params.token || null, route.params.agent_id || null],
+      ([tok, ag]) => {
+        if (tok !== decisionToken || ag !== (agentId || null)) window.location.reload();
+      },
+    );
 
     function targetStorageKey() {
       if (isDecision) return `pi-target:decision:${decisionToken}`;
@@ -1523,6 +1987,10 @@ export default {
     const clientSite = ref("");
     const connected = ref(false);
     const streaming = ref(false);
+    // What the BRIDGE last said about the technician's turn (run_state / ready). A turn can
+    // span several model runs (recovery, auto-continue, the authorizer's follow-up) with
+    // system notes in between; those must not hide Stop while the bridge is still working.
+    let serverRunning = false;
     const messages = ref([]);
     const input = ref("");
 
@@ -1573,6 +2041,29 @@ export default {
     }
     // Auto-pin on the phone: whenever THIS window becomes the driver.
     watch(isDriver, (drv) => { if (drv && isPhone.value && !pinned.value) setPin(true); });
+    // ---- access / seat hand-over -------------------------------------------
+    const accessDialog = ref(false);
+    const grantPending = ref("");
+    const roster = computed(() => (presence.value && presence.value.roster) || { people: [], grants: [] });
+    const grantCount = computed(() => (roster.value.grants || []).length);
+    function whenAgo(ts) {
+      const s = Math.max(1, Math.round((Date.now() - Number(ts)) / 1000));
+      if (s < 90) return `${s}s ago`;
+      if (s < 5400) return `${Math.round(s / 60)}m ago`;
+      return `${Math.round(s / 3600)}h ago`;
+    }
+    // ---- admin capability grants (per ticket / per device) -----------------
+    // The hamburger switches are gated by the user's ROLE. An admin adds one for a single
+    // session from here; the RMM stores it (audited, expiring) and pushes it to the live window.
+    function giveControl(username) {
+      if (!ws || !connected.value || !username) return;
+      grantPending.value = username;
+      ws.send(JSON.stringify({ type: "grant_drive", username }));
+    }
+    function cancelGrant(username) {
+      if (!ws || !connected.value) return;
+      ws.send(JSON.stringify({ type: "revoke_grant", username }));
+    }
     function requestTakeover() {
       if (!ws || !connected.value) return;
       takeoverPending.value = true;
@@ -1848,6 +2339,7 @@ export default {
       if (c.name === "write") return readOnly.value ? "OFF" : "ON";
       if (c.name === "approve") return autoApprove.value ? "ON" : "OFF";
       if (c.name === "credentials") return autoCredential.value ? "ON" : "OFF";
+      if (c.name === "totp") return autoTotp.value ? "ON" : "OFF";
       if (c.name === "email") return allowEmail.value ? "ON" : "OFF";
       return "";
     }
@@ -1976,6 +2468,7 @@ export default {
     const queueAutoClear = ref(true);
     const queuePaused = ref(null);
     const queueRunningId = ref(null);
+    const queueWorkingOn = ref(null);
     const queuePending = ref(0);
     const queueNew = ref("");
     const queueNewCompact = ref(false);
@@ -2012,6 +2505,16 @@ export default {
       return [...rows].reverse();
     });
     const queueAnswerText = ref({});   // question id -> draft answer
+    // WHICH LONG TEXTS THE OPERATOR HAS EXPANDED. The queue panel is a fixed-height column
+    // (header, switches, questions/paused, the "Next prompt" box, Run controls, then the
+    // scrolling list). A question can be 700+ characters, and with two of them the box you
+    // type the NEXT prompt into was pushed off the bottom of the panel - so the text starts
+    // clamped to a few lines and expands on click. Keyed by a string: 'q<id>', 'about<id>',
+    // 'paused'.
+    const queueTextOpen = ref({});
+    function queueTextToggle(key) {
+      queueTextOpen.value = { ...queueTextOpen.value, [key]: !queueTextOpen.value[key] };
+    }
     const queueThreadOpen = ref({});   // item id -> Q&A unfolded
     // Auto-open: the panel opens by itself when a chat comes up with anything queued, and
     // whenever a question arrives. Closing it by hand sticks for this page load.
@@ -2021,6 +2524,203 @@ export default {
 
     const costVisible = ref(false);
     const sessionCost = ref(0);
+    const costDesktop = ref(null);
+    // Capabilities an ADMIN granted for this session (not from the user's role) - shown next to
+    // the switch so it is obvious where the permission came from.
+    const grantedCaps = ref([]);
+    const canGrantCaps = ref(false);
+    const decisionRef = ref("");
+
+    // ---- CAPABILITIES FOR THIS SESSION (owner, 2026-09-28) ---------------------------
+    // The switches themselves live in the technician's hamburger and are gated by their ROLE.
+    // When an admin is in the session and a technician needs one anyway, the admin turns it on
+    // from here: one person, this ticket/device, on top of their role, expiring on its own.
+    // `can_grant_caps` comes from the server (superuser or can_edit_core_settings) and is the
+    // same test the API applies, so the block cannot appear for someone who would be refused.
+    const capScopeKind = computed(() => (isDecision ? "ticket" : "device"));
+    // What the grant attaches to. The bridge keys a live window as decision:<ticket> or the
+    // agent id; the RMM stores the same ref on the row so it re-applies when the window reopens.
+    const capScopeRef = computed(() => (isDecision ? String(decisionRef.value || "") : String(agentId || "")));
+    const capCatalog = ref([]);
+    const capPicked = ref([]);
+    const capExisting = ref([]);       // already granted to this person in this scope
+    const capRoleAllowed = ref({});    // cap id -> their role covers it anyway
+    const capPeople = ref([]);
+    const capUsername = ref("");
+    const capMinutes = ref(1440);
+    const capSaving = ref(false);
+    const capMessage = ref("");
+    const capDurations = [
+      { label: "1 hour", value: 60 },
+      { label: "4 hours", value: 240 },
+      { label: "Today (24 hours)", value: 1440 },
+      { label: "Until withdrawn", value: 0 },
+    ];
+    const capPeopleOptions = computed(() => capPeople.value);
+    const capPeopleHint = computed(() =>
+      capInRoster.value
+        ? "Everyone who has joined this session."
+        : "Nobody has joined yet - this is the full user list.",
+    );
+    const capInRoster = computed(() => (roster.value.people || []).length > 0);
+
+    async function loadCapabilities() {
+      if (!canGrantCaps.value || !capScopeRef.value) return;
+      try {
+        const d = await fetchSessionCaps({ list: 1 });
+        capCatalog.value = d.catalog || [];
+      } catch {
+        return;      // the API is the authority on who may grant; say nothing if it refuses
+      }
+      if (!capPeople.value.length) {
+        // Prefer the people actually in the session. Falling back to every active user keeps
+        // the pre-grant case working (a technician who has not opened the ticket yet).
+        const here = (roster.value.people || []).map((p) => ({
+          label: p.display && p.display !== p.username ? `${p.display} (${p.username})` : p.username,
+          value: p.username,
+        }));
+        if (here.length) {
+          capPeople.value = here;
+        } else {
+          try {
+            const u = await fetchUsers();
+            const all = Array.isArray(u) ? u : (u && (u.users || u.results)) || [];
+            capPeople.value = all
+              .filter((x) => x.is_active !== false)
+              .map((x) => ({ label: x.email ? `${x.username} (${x.email})` : x.username, value: x.username }));
+          } catch {
+            capPeople.value = [];
+          }
+        }
+      }
+      if (!capUsername.value && capPeople.value.length) {
+        // Default to whoever is driving: that is who an admin joined the session to help.
+        const driver = (roster.value.people || []).find((p) => p.driving);
+        capUsername.value = (driver && driver.username) || capPeople.value[0].value;
+      }
+      await loadCapsForUser();
+    }
+
+    async function loadCapsForUser() {
+      capExisting.value = [];
+      capRoleAllowed.value = {};
+      if (!capUsername.value || !capScopeRef.value) return;
+      try {
+        const d = await fetchSessionCaps({
+          username: capUsername.value,
+          scope_kind: capScopeKind.value,
+          scope_ref: capScopeRef.value,
+        });
+        capCatalog.value = d.catalog || capCatalog.value;
+        capExisting.value = d.caps || [];
+        capRoleAllowed.value = d.role_allowed || {};
+      } catch {
+        /* leave both unknown rather than claim a capability they may not have */
+      }
+    }
+
+    async function grantCapabilities() {
+      capSaving.value = true;
+      capMessage.value = "";
+      try {
+        const r = await grantSessionCaps({
+          username: capUsername.value,
+          scope_kind: capScopeKind.value,
+          scope_ref: capScopeRef.value,
+          caps: capPicked.value,
+          minutes: capMinutes.value || null,
+          enable: true,
+          note: `granted from the ${capScopeKind.value} session`,
+        });
+        capMessage.value = r.bridge_notified
+          ? "Granted and switched on in their window."
+          : "Granted. It applies the next time they open this chat.";
+        notifySuccess(capMessage.value);
+        capPicked.value = [];
+        await loadCapsForUser();
+      } catch (e) {
+        notifyError(e?.response?.data || "Could not grant the capability");
+      } finally {
+        capSaving.value = false;
+      }
+    }
+
+    // Withdraw everything this person holds in THIS scope. The Settings table that used to do
+    // this is gone, so without it a grant made "until withdrawn" could never be taken back.
+    async function withdrawCapabilities() {
+      capSaving.value = true;
+      capMessage.value = "";
+      try {
+        const r = await revokeSessionCaps({
+          username: capUsername.value,
+          scope_kind: capScopeKind.value,
+          scope_ref: capScopeRef.value,
+        });
+        notifySuccess(r && r.removed ? `Withdrew ${r.removed} grant(s).` : "Nothing to withdraw.");
+        capPicked.value = [];
+        await loadCapsForUser();
+      } catch (e) {
+        notifyError(e?.response?.data || "Could not withdraw the capability");
+      } finally {
+        capSaving.value = false;
+      }
+    }
+
+    // ---- WHAT THE AUTOMATION IS ABOUT TO DO (approval for this ticket) ----------------
+    // Shown before anything runs, so a technician reviews the plan and says go. The plan comes
+    // from the subject's RULE, rendered for this ticket by the server - never from model prose.
+    const approval = ref(null);
+    const approvalBusy = ref(false);
+    const approvalError = ref("");
+
+    async function loadApproval() {
+      if (!isDecision || !decisionRef.value) return;
+      approvalError.value = "";
+      try {
+        approval.value = await fetchAutomationApproval(String(decisionRef.value));
+      } catch {
+        approval.value = null;   // no plan for this ticket is a normal state, not an error
+      }
+    }
+
+    async function requestApprovalPlan() {
+      approvalBusy.value = true;
+      approvalError.value = "";
+      try {
+        const r = await automationApproval({ action: "propose", ticket_ref: String(decisionRef.value) });
+        if (r.error) approvalError.value = r.error;
+        else approval.value = r;
+      } catch (e) {
+        approvalError.value = String(e?.response?.data?.error || e?.response?.data || "could not write a plan");
+      } finally {
+        approvalBusy.value = false;
+      }
+    }
+
+    async function decideApproval(action) {
+      approvalBusy.value = true;
+      approvalError.value = "";
+      try {
+        const r = await automationApproval({ action, ticket_ref: String(decisionRef.value) });
+        if (r.error) approvalError.value = r.error;
+        else if (r.state) approval.value = r;
+        else approval.value = { ...(approval.value || {}), state: action === "approve" ? "approved" : "declined" };
+        if (action === "approve") notifySuccess("Approved - the automation may work this ticket");
+      } catch (e) {
+        // A 409 here is the gate doing its job: the plan changed since it was displayed.
+        approvalError.value = String(e?.response?.data?.error || e?.response?.data || "could not record that");
+      } finally {
+        approvalBusy.value = false;
+      }
+    }
+
+    // Read the catalogue (and who may grant) when the dialog opens, and re-read what the
+    // chosen technician already has whenever the choice changes.
+    watch(accessDialog, (open) => { if (open) loadCapabilities(); });
+    // The decision window is the place a technician decides - so ask what the automation intends
+    // as soon as we know which ticket this is.
+    watch(decisionRef, () => { loadApproval(); }, { immediate: true });
+    watch(capUsername, loadCapsForUser);
     const lastTurnCost = ref(0);
     const costTurns = ref(0);
     // Lifetime spend of the wider window (this device, or this ticket) that the
@@ -2038,10 +2738,30 @@ export default {
     const costSpend = ref(null);
     const costPerTurn = ref(0);
     const costByModel = ref([]);
+    const costByRole = ref([]);
     const modelSwitches = ref(0);
     const switchSpend = ref(0);
     const pricingKnown = ref(true);
     const compacting = ref(false);
+    const compactCancelling = ref(false);
+    // What the overlay says: why it is running and how big the chat was.
+    const compactInfo = ref({ auto: false, tokens: 0, clear: false });
+    const compactStartedAt = ref(0);
+    let compactBackstop = null;
+    watch(compacting, (on) => {
+      if (compactBackstop) { clearTimeout(compactBackstop); compactBackstop = null; }
+      if (on) {
+        compactStartedAt.value = Date.now();
+        // Take focus off the composer so typing does not look like it will go anywhere.
+        try { document.activeElement?.blur?.(); } catch (e) { /* noop */ }
+        // A dropped `compacted`/`error` frame must not lock the window for good.
+        // Just past the bridge's own 5-minute limit, so its "stopped" message lands first.
+        compactBackstop = setTimeout(() => { compacting.value = false; }, 330000);
+      } else {
+        compactCancelling.value = false;
+        compactInfo.value = { auto: false, tokens: 0, clear: false };
+      }
+    });
     const contextPct = computed(() =>
       contextWindow.value > 0
         ? Math.min(100, Math.round((contextTokens.value / contextWindow.value) * 100))
@@ -2068,6 +2788,43 @@ export default {
     // server-side on every toggle and every credential read.
     const autocredentialAllowed = ref(false);
     const autoCredential = ref(false);
+    // Auto-TOTP (ticket windows): the bridge owns the value and remembers it per window.
+    const autototpAllowed = ref(false);
+    const autoTotp = ref(false);
+    // Auto-summarize: per window, on at 100k by default. The bridge owns the value and
+    // remembers a change for this window only; the box shows thousands.
+    const autoSummarize = ref(true);
+    const autoSummarizeK = ref(100);
+    let sentSummarizeK = 100;
+    function sendAutoSummarize(val) {
+      if (ws && connected.value) ws.send(JSON.stringify({ type: "set_auto_summarize", value: !!val }));
+    }
+    function sendAutoSummarizeTokens() {
+      const k = Math.round(Number(autoSummarizeK.value));
+      if (!Number.isFinite(k) || k <= 0) { autoSummarizeK.value = sentSummarizeK; return; }
+      const clamped = Math.min(1000, Math.max(20, k));
+      autoSummarizeK.value = clamped;
+      if (clamped === sentSummarizeK) return;
+      sentSummarizeK = clamped;
+      if (ws && connected.value) {
+        ws.send(JSON.stringify({ type: "set_auto_summarize_tokens", value: clamped * 1000 }));
+      }
+    }
+    // Where the threshold came from: the agent group / model (inherited) or this window.
+    const summarizeInherited = ref(true);
+    const summarizeInheritedK = ref(100);
+    function resetAutoSummarizeTokens() {
+      if (ws && connected.value) ws.send(JSON.stringify({ type: "set_auto_summarize_tokens", value: "default" }));
+    }
+    function applySummarizeState(enabled, tokens, inherited, inheritedTokens) {
+      if (inherited !== undefined) summarizeInherited.value = !!inherited;
+      if (inheritedTokens !== undefined && Number(inheritedTokens) > 0) summarizeInheritedK.value = Math.round(Number(inheritedTokens) / 1000);
+      if (enabled !== undefined) autoSummarize.value = !!enabled;
+      if (tokens !== undefined && Number(tokens) > 0) {
+        autoSummarizeK.value = Math.round(Number(tokens) / 1000);
+        sentSummarizeK = autoSummarizeK.value;
+      }
+    }
     // Technician's own name for this conversation. Mirrored into the window title so a
     // desktop full of Pi popups is navigable, and into AI History so it is findable later.
     const sessionLabel = ref("");
@@ -2098,9 +2855,13 @@ export default {
     }
     // For an "AI Resolve" session: once ready, pull the run's finding and send a
     // seed prompt asking for read-only fix OPTIONS.
-    async function maybeSeedResolve() {
+    // `hasHistory` = this window reopened onto a conversation that already exists
+    // (a refresh now RESUMES instead of starting over). The seed prompt describes the
+    // finding once; re-sending it on every reload would ask the same question again.
+    async function maybeSeedResolve(hasHistory) {
       if (!resolveRun || resolveSeeded) return;
       resolveSeeded = true;
+      if (hasHistory) return;
       let finding = "";
       try {
         const data = await fetchAITaskRunLive(resolveRun);
@@ -2145,6 +2906,11 @@ export default {
     const streamStartAt = ref(0);
     const lastActivityAt = ref(0);
     const nowTick = ref(Date.now());
+    const compactElapsed = computed(() => {
+      if (!compactStartedAt.value) return "0s";
+      const s = Math.max(0, Math.floor((nowTick.value - compactStartedAt.value) / 1000));
+      return s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+    });
     let tickTimer = null;
     function markActivity() {
       lastActivityAt.value = Date.now();
@@ -2161,10 +2927,62 @@ export default {
     );
     // "stalled" = no events at all for 45s while supposedly working
     const stalled = computed(() => staleSec.value >= 45);
+    // WHAT IT IS DOING RIGHT NOW, IN WORDS.
+    //
+    // While a turn runs, the only thing the window said was "working… (12s)" - and the raw
+    // tool call (name + a wall of JSON args) only appears once the transcript repaints. So a
+    // turn that is five tool calls deep looked identical to one that had not started, and the
+    // owner could not tell what the AI was working on. Every step now publishes a plain-English
+    // line, which the streaming row shows next to the elapsed time and the tool card title uses.
+    const currentActivity = ref(null);   // { label, detail } | null
+    const TOOL_VERBS = {
+      run_device_command: "Running a command on the device",
+      run_command_on_device: "Running a command on the device",
+      run_device_command_with_credential: "Running a command with a stored credential",
+      get_device_hardware: "Reading the device's hardware",
+      helpdesk_call: "Working the ticket",
+      delegate: "Delegating to a specialist",
+      pause_queue: "Asking you a question",
+      read: "Reading a file",
+      write: "Writing a file",
+      edit: "Editing a file",
+      grep: "Searching files",
+      find: "Looking for files",
+      ls: "Listing a directory",
+      bash: "Running a command",
+      web_fetch: "Fetching a web page",
+      web_search: "Searching the web",
+      save_device_note: "Saving a note on the device",
+      attach_capture: "Attaching a captured file",
+      operator_desktop_open_url: "Opening a window on the operator's desktop",
+      get_ticket: "Reading the ticket",
+      update_ticket: "Updating the ticket",
+      resolve_ticket: "Closing the ticket",
+    };
+    /** { label, detail } for one tool call - the detail is the single most useful field. */
+    function toolActivity(name, args) {
+      const n = String(name || "a tool");
+      const a = args && typeof args === "object" ? args : {};
+      const label = TOOL_VERBS[n] || n.replace(/_/g, " ");
+      const oneLine = (v) => String(v == null ? "" : v).split("\n")[0].trim().slice(0, 130);
+      let detail = "";
+      if (a.command) detail = oneLine(a.command);
+      else if (a.question) detail = oneLine(a.question);
+      else if (a.task) detail = oneLine(a.task);
+      else if (a.operation) detail = oneLine(a.operation);
+      else if (a.path) detail = oneLine(a.path);
+      else if (a.pattern) detail = oneLine(a.pattern);
+      else if (a.url) detail = oneLine(a.url);
+      else if (a.role) detail = oneLine(a.role);
+      else if (a.subject) detail = oneLine(a.subject);
+      return { label, detail };
+    }
     const workingText = computed(() => {
       if (stalled.value)
         return `No response for ${staleSec.value}s — it may be stuck or the provider/device is slow. You can keep waiting or Stop.`;
-      return `working… (${elapsedSec.value}s)`;
+      const act = currentActivity.value;
+      if (act) return `${act.label}${act.detail ? `: ${act.detail}` : ""} — ${elapsedSec.value}s`;
+      return `Thinking — no tool running yet (${elapsedSec.value}s)`;
     });
 
     function wsBase() {
@@ -2312,9 +3130,15 @@ export default {
         }
         case "tool_execution_start": {
           const a = ensureAssistant();
+          const act = toolActivity(e.toolName, e.args);
+          // The same readable description feeds the live "what is it doing" line and the
+          // tool card's title, so the card header stops being `run_device_command`.
+          currentActivity.value = act;
           a.tools.push({
             id: e.toolCallId,
             name: e.toolName,
+            label: act.label,
+            detail: act.detail,
             args: e.args ? JSON.stringify(e.args, null, 2) : "",
             result: "",
             done: false,
@@ -2324,6 +3148,7 @@ export default {
           break;
         }
         case "tool_execution_end": {
+          currentActivity.value = null;
           const a = currentIdx >= 0 ? messages.value[currentIdx] : null;
           if (a) {
             const t = a.tools.find((x) => x.id === e.toolCallId);
@@ -2344,22 +3169,37 @@ export default {
           // Only announce a turn that was genuinely in progress. This suppresses
           // reconnect/history hydration, duplicate agent_end events, and an
           // agent_end that arrives after the operator pressed Stop.
-          const completedActiveTurn = streaming.value;
           if (currentIdx >= 0 && messages.value[currentIdx]) {
             messages.value[currentIdx].done = true;
           }
+          // Never leave "Running a command…" hanging after the turn that was running it.
+          currentActivity.value = null;
           streaming.value = false;
+          // If the bridge's turn continues (recovery, auto-continue, authorizer follow-up),
+          // its run_state frame right after this puts Stop back.
+          serverRunning = false;
           scrollToBottom();
-          if (completedActiveTurn) {
-            announceCompletion({
-              kind: isDecision ? "decision" : "chat",
-              hostname: hostname.value,
-              key: `${curSessionId || "session"}:${streamStartAt.value}`,
-            });
-          }
+          // THE SOUND DOES NOT GO HERE (owner, 2026-09-27: "it dinged like it was done and kept
+          // on working"). A run ending is not the turn ending - the bridge continues it with
+          // recovery re-runs, stall-continue, the authorizer, or a queued prompt. The ding moved
+          // to the bridge's `turn_settled` frame, which is only sent when nothing is left to run.
           break;
         }
+        case "turn_settled":
+          currentActivity.value = null;
+          // The bridge has checked: nothing more will run automatically for this turn.
+          if (messages.value[currentIdx >= 0 ? currentIdx : messages.value.length - 1]) {
+            messages.value[currentIdx >= 0 ? currentIdx : messages.value.length - 1].done = true;
+          }
+          announceCompletion({
+            kind: isDecision ? "decision" : "chat",
+            hostname: hostname.value,
+            key: `${curSessionId || "session"}:${streamStartAt.value}`,
+            needsYou: !!m.waiting_for_you,   // a question, not "done": the bong, not the ding
+          });
+          break;
         case "agent_start":
+          serverRunning = true;
           streaming.value = true;
           streamStartAt.value = Date.now();
           markActivity();
@@ -2410,9 +3250,27 @@ export default {
       }, delay);
     }
 
+    // Write the live session id into the address bar as ?resume=<id>. THIS is what makes
+    // a refresh (or a restored tab, or a link someone pasted to themselves) come back to
+    // the SAME conversation: the bridge only ever resumes when it is handed a session id,
+    // so a window that never published its own id was guaranteed to start over. Done with
+    // replace(), not push(), so the back button still leaves the chat instead of walking
+    // back through identical URLs.
+    function stampResumeInUrl(sid) {
+      // A ticket/decision window is minted from its own token and has no resumable id
+      // in this sense - leave its URL alone.
+      if (!sid || isDecision) return;
+      if (route.query.resume === sid) return;
+      const q = { ...route.query, resume: sid };
+      // "start new NOW" has already happened by the time we know the id; keeping the flag
+      // would re-fire on the next reload and throw this conversation away.
+      delete q.new;
+      router.replace({ path: route.path, query: q }).catch(() => { /* navigation noop */ });
+    }
+
     // `fresh: true` = deliberately start a NEW conversation (New chat, AI Resolve). Without
-    // it the bridge carries on the last conversation about this machine, which is what a
-    // refresh, a reconnect and a model switch all want.
+    // it the window reopens the session named in ?resume= - which is what a refresh, a
+    // reconnect and a model switch all want.
     function connect({ model_id, resume, group_id, fresh } = {}) {
       // close any existing
       if (ws) {
@@ -2479,6 +3337,11 @@ export default {
             data.agent_group ? null : data.model_id,
           );
           autoapproveAllowed.value = !!data.autoapprove_allowed;
+          // Which ticket this decision window is about, and whether the viewer may hand out
+          // capabilities - both needed by the admin panel below.
+          decisionRef.value = String(data.subject_ref || data.ticket_ref || "");
+          canGrantCaps.value = !!data.can_grant_caps;
+          grantedCaps.value = Array.isArray(data.caps_granted) ? data.caps_granted : [];
           // The server remembers the operator's Auto-approve choice; render THAT rather
           // than defaulting to off, or a refresh looks like the setting silently died.
           if (data.auto_approve !== undefined) autoApprove.value = !!data.auto_approve;
@@ -2502,6 +3365,7 @@ export default {
             connected.value = false;
             const wasStreaming = streaming.value;
             streaming.value = false;
+            serverRunning = false;
             if (intentionalClose || unmounted) return;
             // Not asked for: reopen the same session. If we were mid-response, say so
             // once - the reconnect hydrates the transcript, so nothing is lost.
@@ -2529,10 +3393,15 @@ export default {
               const notes = [];
               if (m.auto_approve !== undefined) autoApprove.value = !!m.auto_approve;
               curSessionId = m.session_id || curSessionId;
+              // Publish it immediately: from here on a reload lands back in this chat.
+              stampResumeInUrl(curSessionId);
               readOnly.value = !!m.read_only;
               if (m.allow_email !== undefined) allowEmail.value = !!m.allow_email;
               if (m.autocredential_allowed !== undefined) autocredentialAllowed.value = !!m.autocredential_allowed;
               if (m.auto_credential !== undefined) autoCredential.value = !!m.auto_credential;
+              if (m.autototp_allowed !== undefined) autototpAllowed.value = !!m.autototp_allowed;
+              if (m.auto_totp !== undefined) autoTotp.value = !!m.auto_totp;
+              applySummarizeState(m.auto_summarize, m.auto_summarize_tokens, m.auto_summarize_inherited, m.auto_summarize_inherited_tokens);
               // A resumed chat keeps the label it was given, so "Continue" from AI History
               // lands in a window that still knows what it is.
               if (m.label !== undefined) {
@@ -2590,6 +3459,7 @@ export default {
               // Run next disabled, nothing to do but reload. On every ready frame the
               // server's answer wins, in both directions.
               streaming.value = !!m.streaming;
+              serverRunning = !!m.streaming;
               if (m.streaming) streamStartAt.value = Date.now();
               pinned.value = !!m.pinned; pinnedBy.value = m.pinned_by || "";
               if (isPhone.value && m.presence?.you?.role === "owner" && !m.pinned) setPin(true);
@@ -2614,7 +3484,7 @@ export default {
               // every chat window for people who already know the capability exists.
               // The capability is unchanged — only the banner is gone. Other open-time
               // notes (model resume, restored/denied switches) still appear.
-              maybeSeedResolve();
+              maybeSeedResolve(Array.isArray(m.history) && m.history.length > 0);
               // hydrate history — reconstruct the full transcript INCLUDING the
               // command window (tool calls + their output), not just the text
               // typed by the user and assistant. toolCall blocks live on the
@@ -2673,7 +3543,7 @@ export default {
                   const txt = typeof hm.content === "string"
                     ? hm.content
                     : (hm.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-                  if (txt) messages.value.push({ role: "system", text: txt });
+                  if (txt) messages.value.push({ role: "system", text: txt, cost: txt.startsWith("\u{1F4B2} This run:") || txt.startsWith("\u{1F4B2} Summary cost:") });
                 } else if (hm.role === "toolResult") {
                   const tool = toolById[hm.toolCallId];
                   if (tool) {
@@ -2717,6 +3587,10 @@ export default {
               sessionLabel.value = String(m.value || "");
               lastSentLabel = sessionLabel.value;
               applyWindowTitle();
+            } else if (m.type === "auto_summarize_state") {
+              applySummarizeState(m.enabled, m.tokens, m.inherited, m.inherited_tokens);
+            } else if (m.type === "autototp_state") {
+              autoTotp.value = !!m.value;
             } else if (m.type === "autocredential_state") {
               // The server is authoritative: if the role does not carry the permission it
               // comes back false, and the switch snaps back rather than lying to the tech.
@@ -2775,6 +3649,13 @@ export default {
                 text: `\u{1F4F1} ${m.approved ? "Approved" : "Denied"} from the paired phone.`,
               });
               scrollToBottom();
+            } else if (m.type === "run_cost") {
+              // The bridge sends this once the run is over, so it lands under the final
+              // answer. Only sent to roles that may see cost.
+              if (m.text) {
+                messages.value.push({ role: "system", text: m.text, cost: true });
+                scrollToBottom();
+              }
             } else if (m.type === "compacted") {
               // Put the result in the transcript: it is a real, billable event and the
               // technician should be able to see later why the context suddenly shrank.
@@ -2791,18 +3672,45 @@ export default {
                   text: `\u{1F4CB} Where we are (summary):\n\n${m.summary}`,
                 });
               }
+              // What producing the summary cost - same visibility rule as the run cost.
+              if (costVisible.value && m.summary_cost != null && Number.isFinite(Number(m.summary_cost))) {
+                const c = Number(m.summary_cost);
+                const tin = Number(m.summary_tokens_in || 0);
+                const tout = Number(m.summary_tokens_out || 0);
+                messages.value.push({
+                  role: "system",
+                  cost: true,
+                  text: `\u{1F4B2} Summary cost: $${c < 0.01 ? c.toFixed(4) : c.toFixed(2)}`
+                    + (m.summarizer ? ` \u00b7 ${m.summarizer}` : "")
+                    + (tin || tout ? ` \u00b7 ${tin.toLocaleString("en-US")} tokens in / ${tout.toLocaleString("en-US")} out` : ""),
+                });
+              }
               scrollToBottom();
             } else if (m.type === "working" && m.note) {
+              if (/compact/i.test(m.note)) {
+                compactInfo.value = {
+                  auto: !!m.compact_auto,
+                  tokens: Number(m.compact_tokens || 0),
+                  clear: !!m.compact_clear,
+                };
+              }
               compacting.value = /compact/i.test(m.note);
             } else if (m.type === "readonly_state") {
               readOnly.value = m.value;
             } else if (m.type === "allow_email_state") {
               // Same as above: the bridge narrates it once, for both surfaces.
               allowEmail.value = m.value;
+            } else if (m.type === "run_state") {
+              // The bridge's word on whether the technician's turn is still in progress.
+              serverRunning = !!m.streaming;
+              if (m.streaming && !streaming.value) streamStartAt.value = Date.now();
+              streaming.value = !!m.streaming;
             } else if (m.type === "system_note") {
               // A window command answered - possibly typed on the paired phone. It goes
               // in the transcript because "who turned Write mode on" belongs on record.
-              streaming.value = false;
+              // Notes also arrive MID-TURN now (judge, authorizer, auto-continue): only a
+              // note outside a running turn may clear the spinner.
+              if (!serverRunning) streaming.value = false;
               messages.value.push({ role: "system", text: m.text });
               scrollToBottom();
             } else if (m.type === "queue_history") {
@@ -2827,7 +3735,31 @@ export default {
             } else if (m.type === "pin_state") {
               pinned.value = !!m.pinned; pinnedBy.value = m.by || "";
             } else if (m.type === "presence") {
+              // SEAT HANDED TO ME? Say so - the input box silently turning editable is not
+              // enough to notice when you were reading.
+              const wasViewer = !presence.value || !presence.value.you || presence.value.you.role !== "owner";
+              const before = presence.value && presence.value.owner ? presence.value.owner : null;
               presence.value = m;
+              if (wasViewer && m.you && m.you.role === "owner" && before && before.username !== m.you.username) {
+                messages.value.push({ role: "system", text: `\u{1F3AE} ${before.display} handed you control of this session.` });
+                scrollToBottom();
+              }
+            } else if (m.type === "grant_result") {
+              grantPending.value = "";
+              if (!m.ok) {
+                messages.value.push({ role: "system", text: `\u{1F512} ${m.reason || "Could not change access"}` });
+                scrollToBottom();
+              } else if (m.promoted) {
+                messages.value.push({ role: "system", text: `\u{1F3AE} ${m.display || m.username} is driving this session now - you still see everything.` });
+                scrollToBottom();
+              } else {
+                messages.value.push({ role: "system", text: `\u{1F3AE} The seat is reserved for ${m.display || m.username}: they drive the moment they connect.` });
+                scrollToBottom();
+              }
+            } else if (m.type === "approval_refused") {
+              messages.value.push({ role: "system", text: `\u{1F512} ${m.message}` });
+              // Do not leave a dead prompt on screen for someone who cannot answer it.
+              scrollToBottom();
             } else if (m.type === "readonly_refused") {
               messages.value.push({ role: "system", text: `\u{1F512} ${m.message}` });
               scrollToBottom();
@@ -2881,8 +3813,26 @@ export default {
                 });
                 scrollToBottom();
               }
+            } else if (m.type === "queued_instead") {
+              // The bridge queued a message this window sent as a live prompt, because the
+              // assistant was still busy (its own busy flag covered a window ours did not).
+              // Re-label the bubble we added optimistically, so the transcript does not
+              // claim it reached the model when it is waiting its turn on the queue.
+              // Remove it rather than re-label it: queue_started draws it again when it
+              // runs, in the right place in the conversation.
+              const qt = String(m.text || "");
+              for (let i = messages.value.length - 1; i >= 0; i--) {
+                const mm = messages.value[i];
+                if (mm.role === "user" && !mm.queued && (!qt || mm.text === qt)) {
+                  messages.value.splice(i, 1);
+                  break;
+                }
+              }
+              scrollToBottom();
             } else if (m.type === "queue_state") {
               queueItems.value = Array.isArray(m.items) ? m.items : [];
+              // The run in flight when no QUEUE item owns it (a prompt typed in the chat).
+              queueWorkingOn.value = m.working_on || null;
               queueAuto.value = !!m.auto_next;
               queueAutoClear.value = !!m.auto_clear_done;
               queueRunningId.value = m.running_id || null;
@@ -2938,6 +3888,21 @@ export default {
               streamStartAt.value = Date.now();
               markActivity();
               scrollToBottom();
+            } else if (m.type === "perms") {
+              // An admin granted (or revoked) a capability for this window while it is open.
+              if (m.mutate_allowed !== undefined) mutateAllowed.value = !!m.mutate_allowed;
+              if (m.autoapprove_allowed !== undefined) autoapproveAllowed.value = !!m.autoapprove_allowed;
+              if (m.autocredential_allowed !== undefined) autocredentialAllowed.value = !!m.autocredential_allowed;
+              if (m.autototp_allowed !== undefined) autototpAllowed.value = !!m.autototp_allowed;
+              grantedCaps.value = Array.isArray(m.caps_granted) ? m.caps_granted : [];
+              const names = grantedCaps.value.join(", ");
+              messages.value.push({
+                role: "system",
+                text: names
+                  ? `\u{1F511} An admin enabled ${names} for this session.`
+                  : "\u{1F511} The extra permissions for this session were withdrawn.",
+              });
+              scrollToBottom();
             } else if (m.type === "cost_update") {
               // Running spend for this conversation (server is the only source of
               // truth; we never compute cost in the browser).
@@ -2950,6 +3915,8 @@ export default {
               costSpend.value = m.spend || null;
               costPerTurn.value = Number(m.cost_per_turn || 0);
               costByModel.value = Array.isArray(m.by_model) ? m.by_model : [];
+              costByRole.value = Array.isArray(m.by_role) ? m.by_role : [];
+              costDesktop.value = m.desktop && Number(m.desktop.calls || 0) ? m.desktop : null;
               modelSwitches.value = Number(m.model_switches || 0);
               switchSpend.value = Number(m.switch_spend || 0);
               pricingKnown.value = m.pricing_known !== false;
@@ -2968,7 +3935,9 @@ export default {
               notifyError(m.message);
               messages.value.push({ role: "system", text: `\u26a0 ${m.message}` });
               scrollToBottom();
-              streaming.value = false;
+              // An error mid-turn (a recovered provider hiccup, an unreadable image) does not
+              // end the turn; the bridge's run_state does.
+              if (!serverRunning) streaming.value = false;
               // A refused or failed compaction arrives as an error; clear the button too,
               // or it spins until the backstop timeout for something already finished.
               compacting.value = false;
@@ -3007,14 +3976,20 @@ export default {
     // Compacting is a session instruction, not a question for the model, so it goes as
     // its own frame. The bridge also accepts "/compact" typed into the box, which is what
     // works in a window that has not been reloaded since this shipped.
+    // Stop the running summary; the bridge answers with an `error` frame that clears the overlay.
+    function cancelCompact() {
+      if (!ws || !connected.value || !compacting.value) return;
+      compactCancelling.value = true;
+      ws.send(JSON.stringify({ type: "compact_cancel" }));
+    }
+
     function compactWindow() {
       if (!ws || !connected.value || streaming.value || compacting.value) return;
+      compactInfo.value = { auto: false, tokens: contextTokens.value, clear: false };
       compacting.value = true;
-      scrollToBottom(); // the progress row lives at the bottom of the transcript
       ws.send(JSON.stringify({ type: "compact" }));
-      // The bridge answers with `compacted` or an `error`; both clear the flag. This is a
-      // backstop so a dropped frame cannot leave the button spinning forever.
-      setTimeout(() => { compacting.value = false; }, 180000);
+      // The bridge answers with `compacted` or an `error`; both clear the flag. The watch
+      // on `compacting` holds a backstop so a dropped frame cannot lock the window.
     }
 
     // Summarize & clear history: same compaction, plus the bridge marks a durable cut so
@@ -3024,8 +3999,8 @@ export default {
     const clearNote = ref("");
     function summarizeClear() {
       if (!ws || !connected.value || streaming.value || compacting.value) return;
+      compactInfo.value = { auto: false, tokens: contextTokens.value, clear: true };
       compacting.value = true;
-      scrollToBottom(); // the progress row lives at the bottom of the transcript
       const note = String(clearNote.value || "").trim();
       clearNote.value = "";
       // /compact <note> is the same path as typing it: the bridge treats the rest of
@@ -3036,7 +4011,6 @@ export default {
         message: note ? `/compact ${note}` : "",
         instructions: note || undefined,
       }));
-      setTimeout(() => { compacting.value = false; }, 180000);
     }
 
     function send() {
@@ -3054,9 +4028,39 @@ export default {
       // An attachment on its own is a legitimate message ("look at this"), so the send
       // gate is text OR files - but the model is told which is which.
       if ((!text && !files.length) || !connected.value) return;
+      // Summarizing rewrites what the AI works from; nothing goes in until it is done.
+      if (compacting.value) return;
       // Prime Web Audio while this click/keypress still counts as a user gesture.
       // Managed Chromium browsers otherwise may block the later completion ding.
       primeCompletionAudio();
+      // TYPED WHILE IT IS WORKING = A STEER (owner, 2026-09-30). The message goes into the
+      // turn that is running, and the assistant takes it into account at its next step -
+      // a correction or extra instruction, not a separate job. (Typed while idle it is a
+      // new prompt, below.) If the bridge finds the assistant between runs, where a steer
+      // cannot land, it queues the message as "next" and says so (queued_instead).
+      // A / window command is answered by the bridge instantly, so it is never a steer.
+      if (streaming.value && !looksLikeCommand(text)) {
+        const outgoingS = text || "(see attached file)";
+        messages.value.push({
+          role: "user",
+          text: outgoingS,
+          files: files.map((f) => ({ name: f.name, size: f.size, mime: f.mime, preview: f.preview })),
+          steered: true,
+        });
+        currentIdx = -1;
+        markActivity();
+        ws.send(JSON.stringify({
+          type: "steer",
+          message: outgoingS,
+          attachments: files.length
+            ? files.map((f) => ({ name: f.name, mime: f.mime, data: f.data }))
+            : undefined,
+        }));
+        if (files.length) clearFiles();
+        input.value = "";
+        scrollToBottom(true);
+        return;
+      }
       // The bridge needs a sentence to answer; "here, look at this" is what the tech
       // meant by attaching a file with no words, and the bubble must say the same thing
       // the model was sent - a reload reads it back from the transcript.
@@ -3131,6 +4135,18 @@ export default {
     function queuePause() { queueSend({ type: "queue_pause" }); }
     // The item Resume would run next - the one an operator wants to edit first.
     const queueHeadPending = computed(() => queueItems.value.find((i) => i.status === "pending") || null);
+    /**
+     * THE PROMPT BEING WORKED ON RIGHT NOW (owner, 2026-09-27). `running_id` is a separate value
+     * from the items, and the status strip below is an if/else-if chain: "Paused" (the assistant
+     * asked a question) used to REPLACE "Running a queued prompt", so the technician could no
+     * longer see that a prompt was still in flight - or which one. The id is authoritative; the
+     * status is the fallback for a frame that arrived without it.
+     */
+    const queueRunningItem = computed(() =>
+      queueItems.value.find((i) => i.id === queueRunningId.value)
+      || queueItems.value.find((i) => i.status === "running")
+      || null,
+    );
     function queueResume() { queueSend({ type: "queue_resume" }); }
     function queueRunNext() { queueSend({ type: "queue_run_next" }); }
     function queueClearDone() { queueSend({ type: "queue_clear_done" }); }
@@ -3357,6 +4373,10 @@ export default {
       approvalQueue.value = [];
     }
 
+    function sendAutoTotp(val) {
+      if (ws) ws.send(JSON.stringify({ type: "set_autototp", value: !!val }));
+    }
+
     function sendAutoCredential(val) {
       if (ws) ws.send(JSON.stringify({ type: "set_autocredential", value: !!val }));
       saveAIAutoCredential(!!val).catch(() => {
@@ -3497,8 +4517,27 @@ export default {
     }
 
     onMounted(() => {
-      // ?new=1 (mobile inbox "New chat") starts a fresh conversation instead of carrying on.
-      connect({ resume: route.query.resume, model_id: route.query.model, fresh: route.query.new === "1" });
+      // ?new=1 (agent menu "Pi.dev", AI History "New chat", mobile inbox "New chat")
+      // starts a fresh conversation instead of carrying on.
+      const startFresh = route.query.new === "1";
+      // ?new=1 beats a stale ?resume= in the same URL (the agent menu can hand us both
+      // when it reuses an existing chat window): asking for a new chat must not quietly
+      // reopen the old one. The real session id is written back by stampResumeInUrl as
+      // soon as the bridge says `ready`.
+      connect({
+        resume: startFresh ? null : route.query.resume,
+        model_id: route.query.model,
+        fresh: startFresh,
+      });
+      // ...and drop the flag from the URL straight away: it means "start new NOW", not
+      // "start new on every reload". Leaving it in would make a refresh (or a restored
+      // window) abandon the conversation just started and open yet another empty one.
+      if (startFresh) {
+        const q = { ...route.query };
+        delete q.new;
+        delete q.resume;
+        router.replace({ path: route.path, query: q }).catch(() => { /* navigation noop */ });
+      }
       tickTimer = setInterval(() => {
         nowTick.value = Date.now();
       }, 1000);
@@ -3531,10 +4570,20 @@ export default {
       clientSite,
       costVisible,
       sessionCost,
+      costDesktop,
+      grantedCaps, canGrantCaps, decisionRef,
+      capScopeKind, capScopeRef, capCatalog, capPicked, capExisting, capRoleAllowed,
+      capPeopleOptions, capPeopleHint, capUsername, capMinutes, capDurations, capSaving,
+      capMessage, grantCapabilities, withdrawCapabilities,
+      approval, approvalBusy, approvalError, loadApproval, requestApprovalPlan, decideApproval,
       lastTurnCost,
       costTurns,
       contextTokens,
       compacting,
+      compactCancelling,
+      cancelCompact,
+      compactInfo,
+      compactElapsed,
       compactWindow,
       clearConfirm,
       clearNote,
@@ -3543,6 +4592,7 @@ export default {
       costTokens,
       costSpend,
       costPerTurn,
+      costByRole,
       costByModel,
       modelSwitches,
       switchSpend,
@@ -3571,6 +4621,8 @@ export default {
       queueEditText,
       queueQuestions,
       queueAnswerText,
+      queueTextOpen,
+      queueTextToggle,
       queueAnswer,
       queueDismissQuestion,
       queueItemText,
@@ -3600,7 +4652,8 @@ export default {
       queueSetAutoClear,
       queuePause,
       queueResume,
-      queueHeadPending,
+      queueHeadPending, queueRunningItem, queueWorkingOn,
+      currentActivity, toolActivity,
       promptWords,
       queueFiles,
       queueFileInput,
@@ -3652,6 +4705,7 @@ export default {
       canTakeOver,
       takeoverAsk,
       takeoverPending,
+      accessDialog, roster, grantCount, myUsername, grantPending, whenAgo, giveControl, cancelGrant,
       requestTakeover,
       answerTakeover,
       // attachments
@@ -3685,6 +4739,16 @@ export default {
       sendAllowEmail,
       autocredentialAllowed,
       autoCredential,
+      autototpAllowed,
+      autoTotp,
+      sendAutoTotp,
+      autoSummarize,
+      autoSummarizeK,
+      summarizeInherited,
+      summarizeInheritedK,
+      resetAutoSummarizeTokens,
+      sendAutoSummarize,
+      sendAutoSummarizeTokens,
       sendAutoCredential,
       remoteAllowed,
       remoteEnabled,
@@ -3781,6 +4845,31 @@ export default {
     padding-right: 10px;
   }
 }
+.pi-run-cost {
+  margin-top: -10px;
+  padding-left: 4px;
+  opacity: 0.9;
+}
+.pi-compact-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 7000; /* above menus and dialogs: nothing may be clicked while it runs */
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  cursor: wait;
+}
+.pi-compact-card {
+  background: #1d1d1d;
+  border: 1px solid rgba(255, 193, 7, 0.45);
+  border-radius: 12px;
+  padding: 32px 28px;
+  max-width: 480px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
 .pichat {
   height: 100vh; /* fallback: browsers without dvh */
   height: 100dvh; /* follows the mobile browser chrome as it slides away */
@@ -3861,6 +4950,12 @@ export default {
   border-left: 1px solid #3a3a3a;
 }
 /* ... or, when the window is too narrow to share, floating over it. */
+/* While a summary runs the rest of the window is behind the blocking overlay, but the
+   queue stays usable (owner, 2026-09-26): prompts added now run when the summary is done -
+   the bridge treats a running summary as busy. */
+.pi-queue.pi-queue--live {
+  z-index: 7001;
+}
 .pi-queue--overlay {
   position: absolute;
   top: 0;
@@ -3925,6 +5020,41 @@ export default {
   border: 1px solid rgba(255, 152, 0, 0.45);
   border-radius: 6px;
   padding: 8px;
+}
+/* THE PANEL IS A FIXED-HEIGHT COLUMN, so every part of it must know its own size.
+   The questions/paused block used to be unbounded: a single 700-character question (the
+   assistant's pause_queue text) - and two of them - grew tall enough to push the
+   "Next prompt" box and the Run/Resume buttons off the bottom of the panel, which read as
+   "I can't add anything to the queue any more". Cap it and let THIS region scroll; the
+   prompt box below it then never moves. */
+.pi-queue-questions,
+.pi-queue-paused {
+  max-height: 32vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Long text starts short and expands on click (see queueTextOpen in the script). */
+.pi-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--pi-clamp-lines, 5);
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.pi-clamp--open {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+/* One-line status strips: never wrap, ellipsize, and the tooltip carries the whole text. */
+.pi-oneline {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pi-queue-question {
   background: #2a2420;
@@ -3995,10 +5125,48 @@ export default {
 .pi-queue-hist-sep {
   margin-left: 0;
 }
-.pi-queue-list {
+/* Everything under the header: scrolls as a whole when the window is too short for it. */
+.pi-queue-body {
   flex: 1 1 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Nothing but the list may be squashed: a shrunk status box would hide its own text. */
+.pi-queue-body > :not(.pi-queue-list) {
+  flex-shrink: 0;
+}
+.pi-queue-working {
+  background: rgba(76, 175, 80, 0.08);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  border-radius: 6px;
+  flex: 0 0 auto;
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* The list fills what is left and scrolls itself, but never collapses below a usable floor -
+   below that the body above scrolls instead. */
+.pi-queue-list {
+  flex: 1 1 0;
+  min-height: 200px;
+  overflow-y: auto;
+}
+/* The live "what it is doing" line: one line, ellipsized, tooltip carries the whole thing. */
+.pi-working {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pi-tool-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60ch;
 }
 .pi-queue-thumb {
   width: 18px;
@@ -4152,5 +5320,51 @@ export default {
   color: #cfd8dc;
   max-height: 320px;
   overflow: auto;
+}
+
+/* ---- THE APPROVAL CARD: what the automation is about to do ---------------------------- */
+.automation-card {
+  border-left: 3px solid #4db6ac;
+}
+.plan-list {
+  margin-top: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.plan-step {
+  font-family: monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  padding: 1px 0;
+  overflow-wrap: anywhere;
+}
+/* A step that changes something is called out: those are the lines a technician is actually
+   approving, and they must not read like the read-only ones. */
+.plan-step--mutates .plan-step-text {
+  color: #ffcc80;
+  font-weight: 600;
+}
+.plan-approved {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-left: 3px solid #26a69a;
+  background: rgba(38, 166, 154, 0.10);
+  border-radius: 0 4px 4px 0;
+}
+.plan-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-left: 3px solid #ffb74d;
+  background: rgba(255, 183, 77, 0.10);
+  border-radius: 0 4px 4px 0;
+}
+
+/* A capability's label + hint inside the Access dialog. min-width:0 is what stops a long
+   hint from widening the dialog (flex items default to min-width:auto). */
+.cap-opt {
+  min-width: 0;
 }
 </style>

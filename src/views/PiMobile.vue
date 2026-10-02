@@ -2,7 +2,13 @@
   <!-- PI.DEV MOBILE INBOX (the installed app's home screen).
        The RMM shell sets body { overflow-y: hidden } (App.vue), so nothing may rely on the
        window scrolling: this page is its own fixed-height column and the LIST scrolls. -->
-  <div class="pim bg-grey-10 text-grey-2">
+  <div
+    class="pim bg-grey-10 text-grey-2"
+    @touchstart.passive="onTouchStart"
+    @touchmove.passive="onTouchMove"
+    @touchend="onTouchEnd"
+    @touchcancel="onTouchEnd"
+  >
     <div class="pim-head bg-primary text-white">
       <div class="row items-center no-wrap q-px-sm" style="height: 52px">
         <q-avatar square size="30px" class="q-mr-sm"><img src="/icons/pi-192.png" /></q-avatar>
@@ -13,9 +19,15 @@
           <q-tooltip>Install as an app</q-tooltip>
         </q-btn>
         <q-btn flat dense round icon="add_comment" @click="newChatOpen = true" />
-        <q-btn flat dense round icon="refresh" :loading="loading" @click="load" />
+        <!-- The ONLY automatic refresh is the one you ask for: this button or a pull from
+             the very top. The list used to reload itself every 20s, which re-sorted rows
+             under your thumb mid-read. Instead we show how old the list is. -->
+        <q-btn flat dense round icon="refresh" :loading="loading" @click="load">
+          <q-tooltip>Refresh · {{ loadedAgo }}</q-tooltip>
+        </q-btn>
       </div>
       <q-tabs v-model="tab" dense align="justify" active-color="white" indicator-color="amber-6" narrow-indicator class="text-grey-4">
+        <q-tab name="recent" no-caps :label="`Recent · ${recentCount}`" />
         <q-tab name="decisions" no-caps :label="`Tickets · ${visibleDecisions}`" />
         <q-tab name="chats" no-caps :label="`Devices · ${chats.length}`" />
       </q-tabs>
@@ -77,7 +89,7 @@
       <span class="q-ml-xs text-caption">{{ pullDist >= PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh' }}</span>
     </div>
     <!-- THE ONLY THING THAT SCROLLS -->
-    <div ref="scroller" class="pim-scroll" @touchstart.passive="onTouchStart" @touchmove.passive="onTouchMove" @touchend="onTouchEnd" @touchcancel="onTouchEnd">
+    <div ref="scroller" class="pim-scroll">
       <div v-if="error" class="q-pa-md text-negative">{{ error }}</div>
       <q-list separator dark>
         <q-item
@@ -94,6 +106,7 @@
           </q-item-section>
           <q-item-section>
             <q-item-label lines="1" class="text-body1">
+              <q-badge v-if="yours(r)" color="amber-8" text-color="black" label="YOU" class="q-mr-xs" />
               <b>{{ r.kind === 'decision' ? r.ticket_ref : r.hostname }}</b>
               <span v-if="r.client" class="text-grey-5"> · {{ r.client }}</span>
             </q-item-label>
@@ -112,14 +125,19 @@
             </div>
           </q-item-section>
           <q-item-section side top class="text-caption">
+            <q-badge v-if="tab === 'recent'" :color="r.kind === 'decision' ? 'blue-grey-8' : 'teal-9'"
+              :label="r.kind === 'decision' ? 'TICKET' : 'DEVICE'" class="q-mb-xs" />
             <q-badge v-if="r.subject_kind === 'crm'" color="purple-7" label="OPP" class="q-mb-xs" />
             <q-badge v-if="r.kind === 'decision' && r.stage" :color="stageColor(r.stage)" :label="r.stage" class="q-mb-xs" />
-            <span class="text-grey-6">{{ when(r.updated) }}</span>
+            <span class="text-grey-6">{{ when(yoursAt(r) || r.updated) }}</span>
           </q-item-section>
         </q-item>
       </q-list>
       <div v-if="!rows.length && !loading" class="text-grey-6 q-pa-xl text-center">
         <q-icon name="inbox" size="40px" class="q-mb-sm" /><br />Nothing here yet.
+      </div>
+      <div v-if="rows.length" class="q-pt-sm text-caption text-grey-7 text-center">
+        Updated {{ loadedAgo }} · pull down from the top row to refresh
       </div>
       <div class="q-pa-md text-caption text-grey-6 text-center">
         The AI runs on the server. Closing this app does not stop it — reopen a chat to pick
@@ -166,7 +184,12 @@ export default defineComponent({
   name: "PiMobile",
   setup() {
     const router = useRouter();
-    const tab = ref("decisions");
+    // The tab you were last on is where you left off; coming back to "Tickets" every time
+    // hid whatever you were actually working on. "Recent" (both kinds, your work first)
+    // is the default for a first run.
+    const TAB_KEY = "pi.mobile.tab";
+    const tab = ref(localStorage.getItem(TAB_KEY) || "recent");
+    watch(tab, (v) => localStorage.setItem(TAB_KEY, v));
     const loading = ref(false);
     const error = ref("");
     const filter = ref("");
@@ -207,21 +230,33 @@ export default defineComponent({
 
     // PULL TO REFRESH, strictly. The stock widget fired on any downward drag of a short
     // list (a list that fits the screen is always "at the top"), so scrolling refreshed.
-    // Now a refresh needs a deliberate pull: the touch must START in the header, or with
-    // the list scrolled to the very top, and travel PULL_TRIGGER px straight down.
+    // A refresh now needs a DELIBERATE pull: the touch must start in the header or on the
+    // FIRST row of the list (with the list already at the top) and travel PULL_TRIGGER px
+    // straight down. A drag that starts on any other row - or that leans sideways - is a
+    // scroll and never refreshes. (The handlers live on the page root, not the scroller,
+    // so a pull that starts on the header bar counts too.)
     const scroller = ref(null);
     const pullDist = ref(0);
     const PULL_TRIGGER = 90;
     let pullStartY = null;
-    let pullArmed = false;
+    let pullStartX = 0;
     function onTouchStart(e) {
       const t = e.touches && e.touches[0];
       if (!t) return;
-      const inHeader = !!(e.target && e.target.closest && e.target.closest(".pim-head"));
-      const atTop = scroller.value ? scroller.value.scrollTop <= 0 : false;
-      pullArmed = inHeader || (atTop && t.clientY < 140);
-      pullStartY = pullArmed ? t.clientY : null;
       pullDist.value = 0;
+      pullStartY = null;
+      const el = e.target;
+      const closest = (sel) => (el && el.closest ? el.closest(sel) : null);
+      const inHeader = !!closest(".pim-head");
+      const atTop = scroller.value ? scroller.value.scrollTop <= 0 : false;
+      const firstRow = scroller.value ? scroller.value.querySelector(".pim-row") : null;
+      const onFirstRow = !!(firstRow && closest(".pim-row") === firstRow);
+      // No rows at all? Then the empty state is the top of the list and may be pulled.
+      const onEmptyTop = !firstRow && !!closest(".pim-scroll");
+      if (inHeader || (atTop && (onFirstRow || onEmptyTop))) {
+        pullStartY = t.clientY;
+        pullStartX = t.clientX;
+      }
     }
     function onTouchMove(e) {
       if (pullStartY === null) return;
@@ -229,7 +264,11 @@ export default defineComponent({
       if (!t) return;
       // Once the list has scrolled at all, this is a scroll, not a pull.
       if (scroller.value && scroller.value.scrollTop > 0) { pullStartY = null; pullDist.value = 0; return; }
-      pullDist.value = Math.max(0, t.clientY - pullStartY);
+      const dy = t.clientY - pullStartY;
+      const dx = Math.abs(t.clientX - pullStartX);
+      // Sideways (tab swipe, text selection) or upward: not a pull.
+      if (dx > Math.abs(dy) || dy < 0) { pullStartY = null; pullDist.value = 0; return; }
+      pullDist.value = Math.max(0, dy);
     }
     async function onTouchEnd() {
       const fire = pullStartY !== null && pullDist.value >= PULL_TRIGGER;
@@ -257,18 +296,81 @@ export default defineComponent({
       installEvent.value = null;
     }
 
-    const rows = computed(() => {
-      let src = tab.value === "decisions" ? decisions.value : chats.value;
-      if (onlyMine.value) src = src.filter((r) => r.mine);
-      if (hideClosed.value && tab.value === "decisions") src = src.filter((r) => !isClosed(r));
+    // WHAT WAS I WORKING ON? Server `updated` alone answered the wrong question: ticket
+    // rows are touched by automation all day, so the list was ordered by what the BOT did
+    // last, not by what YOU did last. Three signals decide "mine, recently", newest wins:
+    //   1. this device opened it (recorded on tap, survives reinstalling nothing else),
+    //   2. the bridge says you were the last person in that conversation,
+    //   3. you are driving it live right now.
+    const RECENT_KEY = "pi.mobile.recent";
+    const recentMap = ref({});
+    try { recentMap.value = JSON.parse(localStorage.getItem(RECENT_KEY) || "{}") || {}; } catch (e) { recentMap.value = {}; }
+    // Keyed on the THING, not the session: resuming a chat mints a new session id, so
+    // keying on it would forget the device you were just in.
+    const rowKey = (r) => (r.kind === "decision" ? `decision:${r.ticket_ref}` : `chat:${r.agent_id}`);
+    function markOpened(r) {
+      const m = { ...recentMap.value, [rowKey(r)]: new Date().toISOString() };
+      // Keep the map small: the 200 most recent are more than anyone revisits.
+      const keys = Object.keys(m).sort((a, b) => String(m[b]).localeCompare(String(m[a]))).slice(0, 200);
+      recentMap.value = Object.fromEntries(keys.map((k) => [k, m[k]]));
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(recentMap.value)); } catch (e) { /* private mode */ }
+    }
+    const me = ref({});
+    const isMe = (name) => {
+      const n = String(name || "").trim().toLowerCase();
+      if (!n) return false;
+      const mine = [me.value.username, me.value.display]
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter((x) => x.length > 2);
+      return mine.some((x) => x === n || x.includes(n) || n.includes(x));
+    };
+    // Timestamps come from three sources (Django isoformat, the bridge's toISOString, and
+    // ours); compare them as numbers, never as strings.
+    const ts = (v) => (v ? Date.parse(v) || 0 : 0);
+    function yoursAt(r) {
+      if (!r) return 0;
+      let best = ts(recentMap.value[rowKey(r)]);
+      if (r.live && isMe(r.driver)) best = Math.max(best, Date.now());
+      if (r.kind === "decision") {
+        if (isMe(r.last_worked_by)) best = Math.max(best, ts(r.last_worked_at));
+      } else if (isMe(r.user)) {
+        best = Math.max(best, ts(r.updated));
+      }
+      return best;
+    }
+    const yours = (r) => yoursAt(r) > 0;
+
+    function applyFilters(src, kindIsDecision) {
+      let out = src;
+      if (onlyMine.value) out = out.filter((r) => r.mine);
+      if (hideClosed.value && kindIsDecision) out = out.filter((r) => !isClosed(r));
       const f = filter.value.trim().toLowerCase();
+      if (!f) return out;
       const field = filterField.value;
-      const list = !f ? src : src.filter((r) => {
+      return out.filter((r) => {
         if (field === "any") return JSON.stringify(r).toLowerCase().includes(f);
         return String(r[field] || "").toLowerCase().includes(f);
       });
-      return [...list].sort((a, b) => (Number(b.live) - Number(a.live)) || String(b.updated).localeCompare(String(a.updated)));
+    }
+
+    // Your work first, newest at the very top; everything else below it in the old order
+    // (live conversations, then most recently updated).
+    function byRecency(a, b) {
+      const am = yoursAt(a);
+      const bm = yoursAt(b);
+      if (am || bm) return bm - am;
+      return (Number(b.live) - Number(a.live)) || (ts(b.updated) - ts(a.updated));
+    }
+
+    const rows = computed(() => {
+      const list = tab.value === "recent"
+        ? [...applyFilters(decisions.value, true), ...applyFilters(chats.value, false)]
+        : [...applyFilters(tab.value === "decisions" ? decisions.value : chats.value, tab.value === "decisions")];
+      return list.sort(byRecency);
     });
+    const recentCount = computed(
+      () => decisions.value.filter(yours).length + chats.value.filter(yours).length,
+    );
 
     const label = (a) => `${a.hostname} · ${a.client}${a.online ? "" : " (offline)"}`;
     async function load() {
@@ -276,6 +378,8 @@ export default defineComponent({
       error.value = "";
       try {
         const d = await fetchMobileInbox();
+        me.value = d.me || {};
+        loadedAt.value = Date.now();
         decisions.value = d.decisions || [];
         chats.value = d.chats || [];
         agents.value = d.agents || [];
@@ -294,7 +398,7 @@ export default defineComponent({
           .map((a) => ({ label: label(a), value: a.agent_id }));
       });
     }
-    function open(r) { router.push(r.url); }
+    function open(r) { markOpened(r); router.push(r.url); }
     function startNew() { newChatOpen.value = false; router.push(`/pichat/${newAgent.value}?new=1`); }
     function stageColor(st) {
       const s = String(st || "").toLowerCase();
@@ -312,14 +416,28 @@ export default defineComponent({
         ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         : d.toLocaleDateString([], { month: "short", day: "numeric" });
     }
+    // How stale is what you are looking at? Shown instead of reloading behind your back.
+    const loadedAt = ref(0);
+    const nowTick = ref(Date.now());
+    const loadedAgo = computed(() => {
+      if (!loadedAt.value) return "not loaded yet";
+      const s = Math.max(0, Math.round((nowTick.value - loadedAt.value) / 1000));
+      if (s < 60) return "just now";
+      const m = Math.round(s / 60);
+      if (m < 60) return `${m}m ago`;
+      return `${Math.round(m / 60)}h ago`;
+    });
     let timer = null;
     onMounted(() => {
       load();
-      timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 20000);
+      // Ticks the "updated Nm ago" label only - it never fetches. The inbox reloads when
+      // YOU ask: the refresh button, or a pull down from the top row.
+      timer = setInterval(() => { nowTick.value = Date.now(); }, 30000);
     });
     onBeforeUnmount(() => { clearInterval(timer); window.removeEventListener("beforeinstallprompt", onBip); });
     return { tab, loading, error, filter, filterField, filterFields, filterFieldLabel, onlyMine,
-      filtersOpen, filtersActive, hideClosed, visibleDecisions,
+      filtersOpen, filtersActive, hideClosed, visibleDecisions, recentCount, yours, yoursAt,
+      loadedAgo,
       decisions, chats, rows, newChatOpen, newAgent, agentOptions,
       scroller, pullDist, PULL_TRIGGER, onTouchStart, onTouchMove, onTouchEnd,
       installHelp, installEvent, isStandalone, install, load, filterAgents, open, startNew, when, stageColor };

@@ -20,6 +20,8 @@
     </settings-section>
     <q-table
       :rows="groups"
+      :visible-columns="visibleColumns"
+      wrap-cells
       :columns="columns"
       row-key="id"
       dense
@@ -100,6 +102,18 @@
             label="Workspace path (optional)"
             hint="Server-side directory. When set, file / grep / coder subagents run there. Leave empty for ticket/IT chats."
           />
+          <q-input
+            v-model.number="form.auto_summarize_k"
+            type="number"
+            outlined
+            dense
+            :min="20"
+            :max="1000"
+            suffix="k tokens"
+            label="Auto-summarize at"
+            hint="Chats in this group summarize once their context passes this and the AI has finished. A window's own setting still wins. Default 100k; cheap-to-re-read orchestrators (Luna) can go higher."
+            style="max-width: 360px"
+          />
           <div class="row q-gutter-md">
             <q-checkbox v-model="form.enabled" label="Enabled" />
             <q-checkbox v-model="form.is_default" label="Default group (outranks Models default)" />
@@ -171,11 +185,40 @@
             <div class="col-10 col-md-3">
               <q-select
                 v-model="m.thinking_level"
-                :options="['off', 'minimal', 'low', 'medium', 'high']"
+                :options="thinkingOptionsFor(m)"
                 outlined
                 dense
                 label="Thinking"
+                :hint="thinkingHintFor(m)"
               />
+            </div>
+            <!-- BACKUP MODEL (owner, 2026-09-27): the model this role switches to when its
+                 provider refuses outright - quota, billing, auth, a retired model. Retrying the
+                 same provider is pointless, so the bridge switches and carries on. Blank = off. -->
+            <div class="col-12 col-md-7 q-mt-xs">
+              <q-select
+                :model-value="fallbackModelValue(m)"
+                :options="availableOptions"
+                emit-value
+                map-options
+                outlined
+                dense
+                clearable
+                use-input
+                input-debounce="0"
+                label="Backup model if the provider refuses (optional)"
+                :loading="loadingAvailable"
+                @filter="filterAvailable"
+                @update:model-value="setFallbackModel(m, $event)"
+              >
+                <template #no-option>
+                  <q-item><q-item-section class="text-grey">No model matches</q-item-section></q-item>
+                </template>
+                <q-tooltip>
+                  Used only for provider refusals (quota, billing, auth, model retired) - a different
+                  provider is required, so pick one that is not the model above.
+                </q-tooltip>
+              </q-select>
             </div>
             <div class="col-2 col-md-1 row no-wrap items-center justify-end">
               <q-btn
@@ -238,6 +281,7 @@
 
 <script>
 import { ref, computed, onMounted } from "vue";
+import { useQuasar } from "quasar";
 import {
   fetchAIAgentGroups,
   saveAIAgentGroup,
@@ -253,6 +297,7 @@ export default {
   name: "AIAgentGroups",
   components: { SettingsSection },
   setup() {
+    const $q = useQuasar();
     const groups = ref([]);
     const roles = ref([]);
     const dialog = ref(false);
@@ -278,14 +323,29 @@ export default {
       workspace: "",
       enabled: true,
       is_default: false,
+      auto_summarize_k: 100,
       members: [],
     });
     const form = ref(emptyForm());
 
+    // A laptop's settings pane cannot hold six columns plus a members list; fold the text and
+    // drop the optional columns below `lg` so the tab never scrolls sideways.
+    const visibleColumns = computed(() =>
+      $q.screen.lt.xl
+        ? ["name", "kind", "is_default", "enabled", "actions"]
+        : ["name", "kind", "members", "auto_summarize_tokens", "is_default", "enabled", "actions"],
+    );
     const columns = [
       { name: "name", label: "Name", field: "name", align: "left" },
       { name: "kind", label: "Kind", field: "kind", align: "left" },
       { name: "members", label: "Team", field: "members", align: "left" },
+      {
+        name: "auto_summarize_tokens",
+        label: "Summarize at",
+        field: "auto_summarize_tokens",
+        align: "right",
+        format: (v) => `${Math.round(Number(v || 100000) / 1000)}k`,
+      },
       { name: "is_default", label: "Default", field: "is_default", align: "center" },
       { name: "enabled", label: "On", field: "enabled", align: "center" },
       { name: "actions", label: "", field: "actions", align: "right" },
@@ -352,6 +412,29 @@ export default {
       return m.provider && m.model_id ? `${m.provider}/${m.model_id}` : null;
     }
 
+    function fallbackModelValue(m) {
+      return m.fallback_provider && m.fallback_model_id ? `${m.fallback_provider}/${m.fallback_model_id}` : null;
+    }
+
+    function setFallbackModel(m, value) {
+      if (!value) {
+        m.fallback_provider = "";
+        m.fallback_model_id = "";
+        return;
+      }
+      const hit = availableAll.value.find((x) => x.value === value);
+      if (hit) {
+        m.fallback_provider = hit.provider;
+        m.fallback_model_id = hit.model_id;
+      } else {
+        const [provider, ...rest] = String(value).split("/");
+        m.fallback_provider = provider;
+        m.fallback_model_id = rest.join("/");
+      }
+      // Same thinking level as the primary unless someone sets one deliberately.
+      m.fallback_thinking_level = m.fallback_thinking_level || m.thinking_level || "";
+    }
+
     function setMemberModel(m, value) {
       if (!value) {
         m.provider = "";
@@ -371,6 +454,29 @@ export default {
         m.display_name = m.model_id;
       }
       m.enabled = true;
+      const levels = thinkingLevelsOf(m);
+      if (levels && !levels.includes(m.thinking_level)) {
+        m.thinking_level = levels.includes("medium") ? "medium" : levels[levels.length - 1];
+      }
+    }
+
+    const BASE_THINKING = ["off", "minimal", "low", "medium", "high"];
+    function thinkingLevelsOf(m) {
+      const hit = availableAll.value.find(
+        (x) => x.provider === m.provider && x.model_id === m.model_id,
+      );
+      return hit?.thinking_levels?.length ? hit.thinking_levels : null;
+    }
+    function thinkingOptionsFor(m) {
+      const levels = thinkingLevelsOf(m);
+      const opts = levels ? [...levels] : [...BASE_THINKING];
+      if (m.thinking_level && !opts.includes(m.thinking_level)) opts.push(m.thinking_level);
+      return opts;
+    }
+    function thinkingHintFor(m) {
+      const levels = thinkingLevelsOf(m);
+      if (!levels) return "";
+      return levels.includes("xhigh") ? "accepts xhigh" : "no xhigh";
     }
 
     function filterAvailable(val, update) {
@@ -389,6 +495,7 @@ export default {
           provider: m.provider,
           model_id: m.model_id,
           display_name: m.display_name || m.model_id,
+          thinking_levels: m.thinking_levels || null,
         }));
       } catch (e) {
         availableAll.value = [];
@@ -431,6 +538,7 @@ export default {
         workspace: row.workspace || "",
         enabled: row.enabled !== false,
         is_default: !!row.is_default,
+        auto_summarize_k: Math.round(Number(row.auto_summarize_tokens || 100000) / 1000),
         members: (row.members || []).map((m) => ({ ...m })),
       };
       dialog.value = true;
@@ -456,8 +564,14 @@ export default {
         openDefinition(missingDef);
         return;
       }
+      const k = Math.round(Number(form.value.auto_summarize_k));
+      if (!Number.isFinite(k) || k < 20 || k > 1000) {
+        notifyError("Auto-summarize must be between 20k and 1000k tokens");
+        return;
+      }
       saving.value = true;
       const payload = {
+        auto_summarize_tokens: k * 1000,
         name: form.value.name.trim(),
         description: form.value.description,
         kind: form.value.kind,
@@ -484,14 +598,22 @@ export default {
       saving.value = false;
     }
 
-    async function removeGroup(row) {
-      try {
-        await deleteAIAgentGroup(row.id);
-        notifySuccess("Agent group deleted");
-        await load();
-      } catch (e) {
-        notifyError(e?.response?.data?.error || String(e));
-      }
+    function removeGroup(row) {
+      $q.dialog({
+        title: "Delete agent group?",
+        message: `Delete "${row.name}"? Chats using it will no longer have that team. This cannot be undone.`,
+        cancel: true,
+        persistent: true,
+        ok: { label: "Delete", color: "negative" },
+      }).onOk(async () => {
+        try {
+          await deleteAIAgentGroup(row.id);
+          notifySuccess("Agent group deleted");
+          await load();
+        } catch (e) {
+          notifyError(e?.response?.data?.error || String(e));
+        }
+      });
     }
 
     async function seedGroups() {
@@ -520,6 +642,7 @@ export default {
       openDefinition,
       form,
       columns,
+      visibleColumns,
       kindOptions,
       suggestedRoles,
       availableOptions,
@@ -529,8 +652,10 @@ export default {
       memberSummary,
       addRole,
       removeRole,
-      memberModelValue,
+      memberModelValue, fallbackModelValue, setFallbackModel,
       setMemberModel,
+      thinkingOptionsFor,
+      thinkingHintFor,
       filterAvailable,
       addGroup,
       editGroup,

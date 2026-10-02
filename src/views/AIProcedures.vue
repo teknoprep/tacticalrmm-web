@@ -12,7 +12,7 @@
           outlined
           debounce="300"
           placeholder="Search symptom / fix / title…"
-          style="max-width: 320px"
+          style="flex: 0 1 320px; min-width: 0"
           class="q-mr-sm"
           @update:model-value="load"
         >
@@ -71,7 +71,7 @@
           outlined
           options-dense
           label="Category"
-          style="min-width: 180px"
+          style="flex: 0 1 220px; min-width: 0"
           emit-value
           map-options
           @update:model-value="load"
@@ -155,14 +155,14 @@
       </div>
       </q-tab-panel>
       <q-tab-panel name="subjects" class="q-pa-none proc-panel">
-        <ai-ticket-automation-subjects @counts="onSubjectCounts" />
+        <ai-ticket-automation-subjects :open-subject="openSubject" @counts="onSubjectCounts" />
       </q-tab-panel>
       </q-tab-panels>
     </q-card>
 
     <!-- editor -->
     <q-dialog v-model="editDialog" persistent>
-      <q-card style="width: 840px; max-width: 96vw">
+      <q-card style="width: 840px; max-width: 96vw; overflow-x: hidden">
         <q-card-section class="row items-center bg-primary text-white q-py-sm">
           <q-icon name="menu_book" size="sm" class="q-mr-sm" />
           <div class="text-subtitle1">
@@ -254,7 +254,7 @@
 
     <!-- live mining activity -->
     <q-dialog v-model="liveDialog" @hide="onLiveHide">
-      <q-card style="width: 820px; max-width: 96vw">
+      <q-card style="width: 820px; max-width: 96vw; overflow-x: hidden">
         <q-card-section class="row items-center bg-primary text-white q-py-sm">
           <q-icon :name="live.running ? 'sync' : 'monitor_heart'" size="sm" class="q-mr-sm" />
           <div class="text-subtitle1">Live mining activity</div>
@@ -342,6 +342,9 @@ export default defineComponent({
     const subjectsProposed = ref(0);
     const onSubjectCounts = (c) => { subjectsProposed.value = Number(c?.proposed || 0); };
     const q = ref(seed("q"));
+    // ?subject=<id> on the subjects tab opens that subject's editor. Used by the daily
+    // "Ticket Automation Subjects" report so Review & modify lands on the actual proposal.
+    const openSubject = ref(seed("subject"));
     const category = ref(seed("category"));
     const statusFilter = ref(seed("status"));
     const editDialog = ref(false);
@@ -573,6 +576,7 @@ export default defineComponent({
       tab,
       subjectsProposed,
       onSubjectCounts,
+      openSubject,
       rows, categories, allCategories, total, loading, mining, saving, q, category, statusFilter,
       editDialog, edit, editIndex, navList, procTable, pagination, columns, confColor, statusColor,
       liveDialog, live, logBox, openLive, onLiveHide, stopping, stopMine,
@@ -593,6 +597,14 @@ export default defineComponent({
   padding: 6px;
   box-sizing: border-box;
   overflow: hidden;
+}
+
+/* A flex item defaults to min-width:auto, i.e. it refuses to shrink below its own content
+   width - which is how a search box and a 4-option toggle in one row end up pushing the
+   WHOLE window sideways (the scrollbar appears on the page, not on the toolbar). Every
+   shrinkable child is given min-width:0 so the row wraps instead of widening the page. */
+.proc-card :deep(.row > *) {
+  min-width: 0;
 }
 .proc-card {
   width: 100%;
@@ -674,6 +686,10 @@ export default defineComponent({
 /* live mining log */
 .mining-log {
   height: 320px;
+  /* overflow-y:auto alone silently makes the OTHER axis auto too, so a single long token in
+     a log line could put a sideways scrollbar in this box. Wrapping is already handled by
+     .mining-log-line; this states the intent. */
+  overflow-x: hidden;
   overflow-y: auto;
   background: #1e1e1e;
   color: #d4d4d4;

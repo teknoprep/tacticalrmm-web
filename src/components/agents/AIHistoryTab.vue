@@ -469,7 +469,8 @@ export default {
       }
     }
     function newChat() {
-      if (selectedAgent.value) runPiChat(selectedAgent.value);
+      // Explicitly fresh - "New chat" must never carry on the last conversation.
+      if (selectedAgent.value) runPiChat(selectedAgent.value, { new: "1" });
     }
     async function removeChat(row) {
       const agentId = row.agentId || selectedAgent.value;

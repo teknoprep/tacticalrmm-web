@@ -144,8 +144,84 @@ export async function deleteAIModel(id: number) {
   return data;
 }
 
+// Providers the installed pi runtime supports natively (Settings > AI > Providers dropdown).
+export async function fetchNativeAIProviders() {
+  const { data } = await axios.get(`${baseUrl}/ai/native-providers/`);
+  return data;
+}
+
 export async function fetchAvailableAIModels() {
   const { data } = await axios.get(`${baseUrl}/ai/available-models/`);
+  return data;
+}
+
+// pi relay keys (Settings > AI > pi Relay Keys) - see core/relay.py
+export async function fetchRelayKeys() {
+  const { data } = await axios.get(`${baseUrl}/ai/relay/keys/`);
+  return data;
+}
+
+export async function createRelayKey(payload: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/relay/keys/`, payload);
+  return data;
+}
+
+// Emails the user a NEW secret for this key + setup instructions (the old secret stops working).
+export async function sendRelayInstallKey(id: number) {
+  const { data } = await axios.post(`${baseUrl}/ai/relay/keys/${id}/send-install/`);
+  return data;
+}
+
+// Emails every active key holder a "re-run the installer to update your pi extension" notice.
+// Keys are NOT changed or rotated - existing keys keep working. `dryRun` reports who would be
+// emailed without sending.
+export async function notifyRelayUpdate(dryRun = false) {
+  const { data } = await axios.post(`${baseUrl}/ai/relay/keys/notify-update/${dryRun ? "?dry_run=1" : ""}`);
+  return data;
+}
+
+export async function editRelayKey(id: number, payload: Record<string, unknown>) {
+  const { data } = await axios.patch(`${baseUrl}/ai/relay/keys/${id}/`, payload);
+  return data;
+}
+
+// Per-session chat capability grants. See core/session_caps.py - an exception can only ADD to
+// what the user's role already allows. Listing and withdrawing live here; granting happens from
+// the technician's own chat session.
+export async function fetchSessionCaps(params: {
+  scope_kind?: string;
+  scope_ref?: string;
+  username?: string;
+  // list=1 returns EVERY live exception (the Settings table), not one user+scope.
+  list?: number;
+}) {
+  const { data } = await axios.get(`${baseUrl}/ai/session-caps/`, { params });
+  return data;
+}
+
+
+// Withdrawing happens from the same dialog that grants (the Access dialog), so a grant made
+// "until withdrawn" can always be taken back without a DB visit.
+export async function revokeSessionCaps(payload: Record<string, unknown>) {
+  const { data } = await axios.delete(`${baseUrl}/ai/session-caps/`, { data: payload });
+  return data;
+}
+
+// Granting happens from the technician's own chat session (the Access dialog) - the person who
+// needs the switch is in the roster, so it does not belong in Global Settings.
+export async function grantSessionCaps(payload: Record<string, unknown>) {
+  const { data } = await axios.post(`${baseUrl}/ai/session-caps/`, payload);
+  return data;
+}
+
+// Permanently removes a revoked key (admin only, server-enforced).
+export async function purgeRelayKey(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/relay/keys/${id}/?purge=1`);
+  return data;
+}
+
+export async function revokeRelayKey(id: number) {
+  const { data } = await axios.delete(`${baseUrl}/ai/relay/keys/${id}/`);
   return data;
 }
 
@@ -252,6 +328,42 @@ export interface AIProcedure {
 export async function getProcedures(params: { q?: string; category?: string; status?: string } = {}) {
   const { data } = await axios.get(`${baseUrl}/ai/procedures/`, { params });
   return data as { procedures: AIProcedure[]; categories: string[]; all_categories: string[]; total: number };
+}
+
+export interface KbArticle {
+  id: number;
+  title: string;
+  company?: string;
+  url?: string;
+  content?: string;
+  missing?: boolean;
+}
+
+// Resolve helpdesk KB article ids to titles and text. The helpdesk exposes one company's articles
+// at a time, so this resolves ids rather than browsing.
+export async function fetchKbArticles(ids: number[]) {
+  const { data } = await axios.get(`${baseUrl}/ai/kb-articles/`, { params: { ids: (ids || []).join(",") } });
+  return data as { articles: KbArticle[] };
+}
+
+// Type-ahead over the helpdesk KB. Nothing is fetched for an empty or 1-character query: the
+// field stays quiet until a few characters have been typed and the typing has paused.
+export async function searchKbArticles(q: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/kb-articles/`, { params: { q } });
+  return data as {
+    articles: KbArticle[];
+    total?: number;
+    catalogue_size?: number;
+    catalogue_capped?: boolean;
+    needs_more?: boolean;
+  };
+}
+
+// One procedure, in full. Used by the subject editor so an admin can read the procedure a subject
+// works from without leaving the form they are editing.
+export async function fetchAIProcedure(id: number) {
+  const { data } = await axios.get(`${baseUrl}/ai/procedures/${id}/`);
+  return data as AIProcedure;
 }
 
 export async function createProcedure(payload: Partial<AIProcedure>) {
@@ -614,9 +726,104 @@ export async function fetchAutomationSubjects(status?: string) {
   });
   return data as { subjects: AITicketAutomationSubject[]; modes: [string, string][] };
 }
-export async function createAutomationSubject(payload: Partial<AITicketAutomationSubject>) {
-  const { data } = await axios.post(`${baseUrl}/ai/automation-subjects/`, payload);
+export async function createAutomationSubject(payload: Partial<AITicketAutomationSubject>) {  const { data } = await axios.post(`${baseUrl}/ai/automation-subjects/`, payload);
   return data as AITicketAutomationSubject;
+}
+
+// The rule language (conditions, actions, the fixed approval prelude and stop terminator) is
+// served by the server so the editor can never offer a verb the interpreter does not know.
+// The rule language, as the server declares it. Typed loosely on purpose: the editor renders
+// whatever the server offers, so a new verb needs no client change and cannot drift out of sync
+// with the interpreter.
+export interface RuleParam {
+  name: string;
+  type: string;
+  required?: boolean;
+  default?: unknown;
+  choices?: string[];
+}
+export interface RuleCondition {
+  id: string;
+  text: string;
+  plain?: string;
+  needs_ai?: boolean;
+  params?: RuleParam[];
+}
+export interface RuleAction extends RuleCondition {
+  class?: string;
+}
+export interface RuleVocabulary {
+  conditions: RuleCondition[];
+  actions: RuleAction[];
+  prelude: { id: string; text: string; note: string } | null;
+  terminator: { id: string; text: string; note: string } | null;
+  max_depth: number;
+}
+export interface RuleDraft {
+  statements?: { blocks?: Record<string, unknown>[] };
+  english?: string[];
+  errors?: string[];
+  notes?: string;
+  error?: string;
+}
+
+export async function fetchRuleVocab() {
+  const { data } = await axios.get(`${baseUrl}/ai/rule-vocab/`);
+  return data as RuleVocabulary;
+}
+
+// "Have an AI help write this rule": plain English in, a rule tree back. Never saves - it only
+// fills the form, and the draft comes back with any validation problems attached.
+// ---- APPROVAL FOR AUTOMATION ON ONE TICKET ------------------------------------------------
+// What a rule would do on THIS ticket, for a technician to read before saying go. The plan is the
+// rule rendered for this ticket (machine + script names filled in), not model-written prose, so
+// what is approved is exactly what would run.
+export interface ApprovalStep {
+  step: string;
+  detail?: string;
+  needs_ai?: boolean;
+  class?: string;
+  mutating?: boolean;
+  where?: string;
+  depth?: number;
+}
+export interface AutomationApproval {
+  state: "none" | "awaiting_review" | "approved" | "declined" | "expired" | "revoked";
+  ticket_ref?: string;
+  subject?: { id?: number; name?: string };
+  plan?: { host?: string; steps?: ApprovalStep[]; mutates?: boolean; english?: string[] };
+  rule_english?: string[];
+  rule_still_matches?: boolean;
+  approved_by?: string;
+  approver_capacity?: string;
+  approved_at?: string;
+  expires_at?: string;
+  declined_by?: string;
+  decline_reason?: string;
+  awaiting_go?: boolean;
+  error?: string;
+}
+
+export async function fetchAutomationApproval(ticketRef: string) {
+  const { data } = await axios.get(`${baseUrl}/ai/approval/`, { params: { ticket_ref: ticketRef } });
+  return data as AutomationApproval;
+}
+
+// action: "propose" (write the plan for this ticket - Django finds the matching subject),
+//         "approve" (a technician says go on the plan they were shown),
+//         "decline" (with a reason).
+export async function automationApproval(payload: {
+  action: "propose" | "approve" | "decline";
+  ticket_ref: string;
+  reason?: string;
+}) {
+  const { data } = await axios.post(`${baseUrl}/ai/approval/`, payload);
+  return data as AutomationApproval;
+}
+
+export async function draftRule(payload: { description: string; subject?: number | null }) {
+  const { data } = await axios.post(`${baseUrl}/ai/rule-draft/`, payload);
+  return data as RuleDraft;
 }
 export async function updateAutomationSubject(id: number, payload: Partial<AITicketAutomationSubject>) {
   const { data } = await axios.put(`${baseUrl}/ai/automation-subjects/${id}/`, payload);
@@ -634,6 +841,6 @@ export async function fetchMobileInbox() {
     decisions: Record<string, unknown>[];
     chats: Record<string, unknown>[];
     agents: { agent_id: string; hostname: string; client: string; online: boolean }[];
-    me: { username: string; can_take_over: boolean };
+    me: { username: string; display?: string; odoo_user_id?: number; can_take_over: boolean };
   };
 }
