@@ -462,8 +462,11 @@ export default {
       runRemoteProxy(agent_id);
     }
 
+    // Pi.dev from the agent (right-click) menu ALWAYS starts a brand new conversation.
+    // Carrying on an older one is done deliberately from the AI History tab ("Continue"),
+    // so this entry point never silently inherits whatever was last discussed.
     function launchPiChat(agent_id) {
-      runPiChat(agent_id);
+      runPiChat(agent_id, { new: "1" });
     }
 
     function launchWebVNC(agent_id) {

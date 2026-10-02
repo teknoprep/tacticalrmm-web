@@ -193,13 +193,31 @@ export function useAICompletionAlerts() {
     }
   }
 
-  function finished({ kind, hostname, key }) {
-    // agent_end should arrive once per turn, but this also protects against a
-    // duplicated WebSocket event without suppressing later turns.
-    if (key && key === lastCompletionKey) return;
+  /**
+   * The turn is over - and ONLY when it really is (owner, 2026-09-27).
+   *
+   * This used to be called from `agent_end`, which is just the end of one model run: the bridge
+   * then continues the turn (recovery re-run, stall-continue, the authorizer, a queued prompt), so
+   * the technician heard "finished" while the assistant kept working. It is now driven by the
+   * bridge's `turn_settled` frame, which is sent only after nothing is left to run.
+   *
+   * `needsYou` marks a settle that is WAITING for the technician (the assistant asked a question):
+   * that is not "finished", so it gets the approval bong and its own wording.
+   */
+  function finished({ kind, hostname, key, needsYou = false }) {
+    if (key && key === lastCompletionKey && !needsYou) return;
     lastCompletionKey = key || `completion-${Date.now()}`;
 
     const isDecision = kind === "decision";
+    if (needsYou) {
+      playApprovalBong();
+      showDesktopNotification({
+        title: isDecision ? "AI Decision needs you" : "Pi Chat needs you",
+        body: `The AI asked a question and is waiting for your answer${hostname ? ` (${hostname})` : ""}.`,
+        key: lastCompletionKey,
+      });
+      return;
+    }
     const title = isDecision ? "AI Decision finished" : "Pi Chat finished";
     const body = isDecision
       ? "The AI has finished working and is ready for review."

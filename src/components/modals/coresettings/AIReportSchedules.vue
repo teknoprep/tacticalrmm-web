@@ -447,6 +447,7 @@ export default {
       { label: "Model", value: "model" },
       { label: "Surface (chat / ticket / unattended)", value: "surface" },
       { label: "Ticket", value: "ticket" },
+      { label: "Agent role (chat / judge / authorizer / coder / researcher...)", value: "role" },
     ];
     const optSpendGroups = computed({
       get: () => form.value.options?.group_by || ["day", "client", "model", "user"],
