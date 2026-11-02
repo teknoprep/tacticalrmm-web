@@ -818,7 +818,8 @@
                 tab === 'smsalerts' ||
                 tab === 'meshcentral' ||
                 tab === 'retention' ||
-                tab === 'ai'
+                tab === 'ai' ||
+                tab === 'quicksupport'
               "
               label="Save"
               color="primary"
