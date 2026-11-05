@@ -240,6 +240,19 @@
                   </div>
                 </q-card-section>
                 <q-card-section class="row items-start content-between">
+                  <div class="col-6">File Browser Experience</div>
+                  <div class="col-6">
+                    <q-option-group
+                      class="q-gutter-lg"
+                      v-model="settings.file_browser_mode"
+                      :options="fileBrowserModeOptions"
+                      type="radio"
+                      inline
+                      dense
+                    />
+                  </div>
+                </q-card-section>
+                <q-card-section class="row items-start content-between">
                   <div class="col-6">Windows Default Terminal</div>
                   <div class="col-6">
                     <q-option-group
@@ -913,6 +926,12 @@ export default {
       return [
         { label: "Use new terminal", value: "new" },
         { label: "Use legacy terminal", value: "legacy" },
+      ];
+    },
+    fileBrowserModeOptions() {
+      return [
+        { label: "Use new file browser", value: "new" },
+        { label: "Use legacy file browser", value: "legacy" },
       ];
     },
     windowsShellOptions() {

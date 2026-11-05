@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "0.101.64",
+  "version": "0.101.65",
   "private": true,
   "productName": "BlueCloud RMM",
   "scripts": {
@@ -21,6 +21,7 @@
     "axios": "1.12.2",
     "dompurify": "3.2.6",
     "dotenv": "16.4.5",
+    "js-sha256": "1.0.0",
     "monaco-editor": "0.50.0",
     "pinia": "2.2.6",
     "qrcode": "1.5.4",
