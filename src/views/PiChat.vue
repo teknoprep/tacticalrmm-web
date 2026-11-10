@@ -1033,6 +1033,26 @@
     </q-banner>
 
     <!-- approval banner (queued: parallel/multi-machine turns can raise several) -->
+    <!-- One-time reveal of a generated password (reset_device_password). Shown to the driving
+         technician only. It is not a chat message: it is not stored and does not appear in the
+         transcript. -->
+    <q-dialog v-model="revealDialogOpen" persistent>
+      <q-card style="min-width: 420px; max-width: 90vw" data-test="pi-password-reveal">
+        <q-card-section class="text-h6">New password for {{ revealed?.username }}</q-card-section>
+        <q-card-section>
+          <div class="text-weight-bold text-negative q-mb-sm">
+            Tell the account holder to change this password right away.
+          </div>
+          <q-input :model-value="revealed?.value" readonly outlined dense data-test="pi-password-value" />
+          <div class="text-caption text-grey-7 q-mt-sm">{{ revealed?.notice }}</div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps icon="content_copy" label="Copy" @click="copyReveal" />
+          <q-btn color="primary" no-caps label="Done - I have noted it" @click="closeReveal" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <q-banner v-if="pendingApproval" class="bg-orange-9 text-white">
       <template #avatar><q-icon name="warning" /></template>
       <div class="pi-approval-ask">
@@ -2742,6 +2762,23 @@ export default {
     // Shown before anything runs, so a technician reviews the plan and says go. The plan comes
     // from the subject's RULE, rendered for this ticket by the server - never from model prose.
     const approval = ref(null);
+    // The one-time generated password. Cleared when the dialog closes.
+    const revealed = ref(null);
+    const revealDialogOpen = computed({
+      get: () => !!revealed.value,
+      set: (open) => { if (!open) closeReveal(); },
+    });
+    function closeReveal() { revealed.value = null; }
+    async function copyReveal() {
+      const v = revealed.value?.value;
+      if (!v) return;
+      try {
+        await navigator.clipboard.writeText(v);
+        $q.notify({ type: "positive", message: "Copied. Clear it from the clipboard after use." });
+      } catch {
+        $q.notify({ type: "negative", message: "Copy failed - select the text and copy it." });
+      }
+    }
     const approvalBusy = ref(false);
     const approvalError = ref("");
 
@@ -3648,6 +3685,8 @@ export default {
               scrollToBottom();
             } else if (m.type === "agent_event") {
               handleAgentEvent(m.event);
+            } else if (m.type === "secret_reveal") {
+              revealed.value = { username: m.username, value: m.value, notice: m.notice };
             } else if (m.type === "approval_request") {
               approvalQueue.value = [...approvalQueue.value, { id: m.id, summary: m.summary }];
               markActivity();
@@ -4687,6 +4726,7 @@ export default {
       sessionCost,
       costDesktop,
       grantedCaps, canGrantCaps, decisionRef,
+      revealed, revealDialogOpen, closeReveal, copyReveal,
       capScopeKind, capScopeRef, capCatalog, capPicked, capExisting, capRoleAllowed,
       capPeopleOptions, capPeopleHint, capUsername, capMinutes, capDurations, capSaving,
       capMessage, grantCapabilities, withdrawCapabilities, capCatalogHere,
